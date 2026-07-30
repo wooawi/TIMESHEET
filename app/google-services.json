@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "753467568556",
+    "project_id": "zinatulina-bd27c3e3",
+    "storage_bucket": "zinatulina-bd27c3e3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:753467568556:android:62b5912ca48bc3f4db4a09",
+        "android_client_info": {
+          "package_name": "com.example.timesheet"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDW7K9numnoy806GjCW9tSkiKuzLggKvOQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
