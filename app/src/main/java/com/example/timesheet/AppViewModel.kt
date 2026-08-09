@@ -13,6 +13,7 @@ import java.time.YearMonth
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
+    // ========== ОСНОВНЫЕ StateFlow ==========
     private val _employees = MutableStateFlow<List<Employee>>(emptyList())
     val employees: StateFlow<List<Employee>> = _employees.asStateFlow()
 
@@ -34,20 +35,43 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _openingBalance = MutableStateFlow(0.0)
     val openingBalance: StateFlow<Double> = _openingBalance.asStateFlow()
 
+    private val _surcharges = MutableStateFlow<List<Surcharge>>(emptyList())
+    val surcharges: StateFlow<List<Surcharge>> = _surcharges.asStateFlow()
+
+    private val _shiftTemplates = MutableStateFlow<List<ShiftTemplate>>(emptyList())
+    val shiftTemplates: StateFlow<List<ShiftTemplate>> = _shiftTemplates.asStateFlow()
+
     private val _cloudSyncEnabled = MutableStateFlow(false)
     val cloudSyncEnabled: StateFlow<Boolean> = _cloudSyncEnabled.asStateFlow()
 
     private val _syncStatus = MutableStateFlow<String?>(null)
     val syncStatus: StateFlow<String?> = _syncStatus.asStateFlow()
 
+    // ========== СПРАВОЧНИКИ ==========
+    private val _timeTypes = MutableStateFlow<List<TimeType>>(defaultTimeTypes())
+    val timeTypes: StateFlow<List<TimeType>> = _timeTypes.asStateFlow()
+
+    private val _expenseCategories = MutableStateFlow<List<ExpenseCategory>>(defaultExpenseCategories())
+    val expenseCategories: StateFlow<List<ExpenseCategory>> = _expenseCategories.asStateFlow()
+
+    private val _units = MutableStateFlow<List<UnitOfMeasure>>(defaultUnits())
+    val units: StateFlow<List<UnitOfMeasure>> = _units.asStateFlow()
+
+    private val _taxes = MutableStateFlow<List<Tax>>(defaultTaxes())
+    val taxes: StateFlow<List<Tax>> = _taxes.asStateFlow()
+
     private val snapshotFile: File by lazy { File(getApplication<Application>().filesDir, "app_state.json") }
 
     init {
         loadLocalSnapshot()
+        if (_surcharges.value.isEmpty()) {
+            _surcharges.value = defaultSurchargeLibrary()
+            persistLocalSnapshot()
+        }
         if (_cloudSyncEnabled.value) startCloudSync()
     }
 
-    // ---------- Навигация по месяцам ----------
+    // ========== НАВИГАЦИЯ ПО МЕСЯЦАМ ==========
     fun nextMonth() { _currentMonth.value = _currentMonth.value.plusMonths(1) }
     fun previousMonth() { _currentMonth.value = _currentMonth.value.minusMonths(1) }
     fun goToMonth(month: YearMonth) {
@@ -55,7 +79,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         persistLocalSnapshot()
     }
 
-    // ---------- Фильтры (сотрудник / организация) ----------
+    // ========== ФИЛЬТРЫ ==========
     fun selectEmployee(id: String?) {
         _selectedEmployeeId.value = id
         persistLocalSnapshot()
@@ -66,7 +90,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         persistLocalSnapshot()
     }
 
-    // ---------- Сотрудники ----------
+    // ========== СОТРУДНИКИ ==========
     fun addOrUpdateEmployee(id: String?, name: String, hourlyRate: Double) {
         val list = _employees.value.toMutableList()
         val entry = if (id == null) {
@@ -88,7 +112,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         persistLocalSnapshot()
     }
 
-    // ---------- Организации ----------
+    // ========== ОРГАНИЗАЦИИ ==========
     fun addOrUpdateOrganization(id: String?, name: String) {
         val list = _organizations.value.toMutableList()
         val entry = if (id == null) {
@@ -110,11 +134,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         persistLocalSnapshot()
     }
 
-    // ---------- Записи журнала (смены / выплаты / налоги / доплаты) ----------
+    // ========== ЗАПИСИ ЖУРНАЛА ==========
     fun addEntry(entry: LedgerEntry) {
         _entries.value = _entries.value + entry
         syncLaunch { FirebaseRepository.upsertEntry(entry) }
         persistLocalSnapshot()
+    }
+
+    fun updateEntry(entry: LedgerEntry) {
+        val list = _entries.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == entry.id }
+        if (idx >= 0) {
+            list[idx] = entry
+            _entries.value = list
+            syncLaunch { FirebaseRepository.upsertEntry(entry) }
+            persistLocalSnapshot()
+        }
     }
 
     fun deleteEntry(id: String) {
@@ -129,7 +164,81 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         persistLocalSnapshot()
     }
 
-    // ---------- Расчёт дохода за текущий месяц (с учётом фильтров) ----------
+    // ========== ДОПЛАТЫ ==========
+    fun addOrUpdateSurcharge(surcharge: Surcharge) {
+        val list = _surcharges.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == surcharge.id }
+        if (idx >= 0) list[idx] = surcharge else list.add(surcharge)
+        _surcharges.value = list
+        persistLocalSnapshot()
+    }
+
+    fun deleteSurcharge(id: String) {
+        _surcharges.value = _surcharges.value.filterNot { it.id == id }
+        _shiftTemplates.value = _shiftTemplates.value.map {
+            if (id in it.surchargeIds) it.copy(surchargeIds = it.surchargeIds - id) else it
+        }
+        persistLocalSnapshot()
+    }
+
+    // ========== ШАБЛОНЫ СМЕН ==========
+    fun addOrUpdateShiftTemplate(template: ShiftTemplate) {
+        val list = _shiftTemplates.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == template.id }
+        if (idx >= 0) list[idx] = template else list.add(template)
+        _shiftTemplates.value = list
+        persistLocalSnapshot()
+    }
+
+    fun deleteShiftTemplate(id: String) {
+        _shiftTemplates.value = _shiftTemplates.value.filterNot { it.id == id }
+        persistLocalSnapshot()
+    }
+
+    // ========== МЕТОДЫ ДЛЯ СПРАВОЧНИКОВ ==========
+
+    fun addOrUpdateTimeType(timeType: TimeType) {
+        val list = _timeTypes.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == timeType.id }
+        if (idx >= 0) list[idx] = timeType else list.add(timeType)
+        _timeTypes.value = list
+        persistLocalSnapshot()
+    }
+
+    fun deleteTimeType(id: String) {
+        _timeTypes.value = _timeTypes.value.filterNot { it.id == id }
+        persistLocalSnapshot()
+    }
+
+    fun addOrUpdateExpenseCategory(category: ExpenseCategory) {
+        val list = _expenseCategories.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == category.id }
+        if (idx >= 0) list[idx] = category else list.add(category)
+        _expenseCategories.value = list
+        persistLocalSnapshot()
+    }
+
+    fun deleteExpenseCategory(id: String) {
+        _expenseCategories.value = _expenseCategories.value.filterNot { it.id == id }
+        persistLocalSnapshot()
+    }
+
+    fun addOrUpdateTax(tax: Tax) {
+        val list = _taxes.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == tax.id }
+        if (idx >= 0) list[idx] = tax else list.add(tax)
+        _taxes.value = list
+        persistLocalSnapshot()
+    }
+
+    fun deleteTax(id: String) {
+        _taxes.value = _taxes.value.filterNot { it.id == id }
+        persistLocalSnapshot()
+    }
+
+    fun getUnits(): List<UnitOfMeasure> = defaultUnits()
+
+    // ========== РАСЧЁТ ==========
     fun currentBreakdown(): PayrollBreakdown = PayrollCalculator.calculate(
         entries = _entries.value,
         employees = _employees.value,
@@ -139,7 +248,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         openingBalance = _openingBalance.value
     )
 
-    // ---------- Firebase (облако) ----------
+    // ========== FIREBASE ==========
     fun setCloudSyncEnabled(enabled: Boolean) {
         _cloudSyncEnabled.value = enabled
         persistLocalSnapshot()
@@ -172,12 +281,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { runCatching { block() } }
     }
 
-    // ---------- Бекапы (локальный JSON, хранится внутри памяти телефона) ----------
+    // ========== БЕКАПЫ ==========
     fun currentState(): AppState = AppState(
         employees = _employees.value,
         organizations = _organizations.value,
         entries = _entries.value,
-        openingBalance = _openingBalance.value
+        openingBalance = _openingBalance.value,
+        surcharges = _surcharges.value,
+        shiftTemplates = _shiftTemplates.value,
+        timeTypes = _timeTypes.value,
+        expenseCategories = _expenseCategories.value,
+        units = _units.value,
+        taxes = _taxes.value
     )
 
     private fun currentSettingsJson(): JSONObject = JSONObject().apply {
@@ -198,6 +313,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _organizations.value = state.organizations
         _entries.value = state.entries
         _openingBalance.value = state.openingBalance
+        _surcharges.value = state.surcharges.ifEmpty { defaultSurchargeLibrary() }
+        _shiftTemplates.value = state.shiftTemplates
+        _timeTypes.value = state.timeTypes.ifEmpty { defaultTimeTypes() }
+        _expenseCategories.value = state.expenseCategories.ifEmpty { defaultExpenseCategories() }
+        _units.value = state.units.ifEmpty { defaultUnits() }
+        _taxes.value = state.taxes.ifEmpty { defaultTaxes() }
+
         if (!settings.isNull("selectedEmployeeId")) {
             _selectedEmployeeId.value = settings.optString("selectedEmployeeId").takeIf { it.isNotBlank() }
         }
@@ -211,7 +333,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteBackup(file: File) = BackupManager.deleteBackup(file)
 
-    // ---------- Автосохранение снимка (чтобы данные не терялись при закрытии приложения) ----------
     private fun persistLocalSnapshot() {
         runCatching {
             val root = JSONObject()
@@ -230,6 +351,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _organizations.value = state.organizations
                 _entries.value = state.entries
                 _openingBalance.value = state.openingBalance
+                _surcharges.value = state.surcharges
+                _shiftTemplates.value = state.shiftTemplates
+                _timeTypes.value = state.timeTypes.ifEmpty { defaultTimeTypes() }
+                _expenseCategories.value = state.expenseCategories.ifEmpty { defaultExpenseCategories() }
+                _units.value = state.units.ifEmpty { defaultUnits() }
+                _taxes.value = state.taxes.ifEmpty { defaultTaxes() }
 
                 val settings = root.optJSONObject("settings") ?: JSONObject()
                 _cloudSyncEnabled.value = settings.optBoolean("cloudSyncEnabled", false)

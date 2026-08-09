@@ -9,15 +9,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.example.timesheet.data.Employee
 import com.example.timesheet.data.Organization
 
-/**
- * Общее выпадающее меню-фильтр: "Все" + список записей (с галочкой у выбранной).
- * Используется и для сотрудников, и для организаций (см. вызовы ниже).
- * Добавление новых записей делается на экранах "Трекер" / "Организация" (через Drawer).
- */
 @Composable
 fun <T> FilterDropdownMenu(
     expanded: Boolean,
@@ -43,7 +39,7 @@ fun <T> FilterDropdownMenu(
         )
         if (items.isEmpty()) {
             DropdownMenuItem(
-                text = { Text("Список пуст", color = androidx.compose.ui.graphics.Color.Gray) },
+                text = { Text("Список пуст", color = Color.Gray) },
                 onClick = { onDismiss() },
                 modifier = Modifier.width(220.dp)
             )

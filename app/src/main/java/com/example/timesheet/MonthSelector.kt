@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -30,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import java.text.DecimalFormat
 import java.time.YearMonth
 
 val monthNamesRu = listOf(
@@ -40,7 +40,6 @@ val monthNamesRu = listOf(
 fun formatMonth(month: YearMonth): String = "${monthNamesRu[month.monthValue - 1]} ${month.year}"
 
 fun formatCurrency(value: Double): String {
-    // Форматирование без зависимости от локали устройства.
     val rounded = Math.round(value * 100) / 100.0
     val sign = if (rounded < 0) "-" else ""
     val abs = kotlin.math.abs(rounded)
@@ -50,7 +49,6 @@ fun formatCurrency(value: Double): String {
     return "$sign$wholeStr,${frac.toString().padStart(2, '0')} ₽"
 }
 
-/** Панель "< июль 2026 >" — стрелки листают месяц, тап по названию открывает выбор даты. */
 @Composable
 fun MonthHeaderBar(
     month: YearMonth,
@@ -94,7 +92,6 @@ fun MonthHeaderBar(
     }
 }
 
-/** Диалог выбора месяца и года (сетка месяцев + переключение года стрелками). */
 @Composable
 fun MonthPickerDialog(
     initialMonth: YearMonth,

@@ -17,109 +17,131 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.AttachMoney
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.MoneyOff
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PermContactCalendar
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.TextButton
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Assignment
-import androidx.compose.material.icons.filled.AttachMoney
-import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.CreditCard
-import androidx.compose.material.icons.filled.MoneyOff
-import androidx.compose.material.icons.filled.PermContactCalendar
-import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.timesheet.data.AppViewModel
 import com.example.timesheet.data.Employee
 import com.example.timesheet.data.EntryType
+import com.example.timesheet.data.ExpenseCategory
+import com.example.timesheet.data.LedgerEntry
 import com.example.timesheet.data.Organization
 import com.example.timesheet.data.PayrollCalculator
+import com.example.timesheet.data.ShiftTemplate
+import com.example.timesheet.data.Surcharge
+import com.example.timesheet.data.Tax
+import com.example.timesheet.data.TimeType
 import com.example.timesheet.ui.AddEntryDialog
+import com.example.timesheet.ui.AddFab
+import com.example.timesheet.ui.AddMenu
+import com.example.timesheet.ui.AppTopBar
 import com.example.timesheet.ui.BackupsScreen
 import com.example.timesheet.ui.EmployeeFilterMenu
+import com.example.timesheet.ui.ExpenseCategoriesScreen
+import com.example.timesheet.ui.ExpenseCategoryEditDialog
+import com.example.timesheet.ui.FilterMenuScreen
 import com.example.timesheet.ui.IncomeBar
 import com.example.timesheet.ui.IncomeBreakdownDialog
+import com.example.timesheet.ui.JournalEntryItem
 import com.example.timesheet.ui.MonthHeaderBar
 import com.example.timesheet.ui.OrganizationFilterMenu
+import com.example.timesheet.ui.PeriodSettingsScreen
+import com.example.timesheet.ui.ShiftJournalScreen
+import com.example.timesheet.ui.ShiftTemplateEditScreen
+import com.example.timesheet.ui.ShiftTemplateListScreen
+import com.example.timesheet.ui.ShiftsMenu
+import com.example.timesheet.ui.SurchargeEditScreen
+import com.example.timesheet.ui.SurchargeListScreen
+import com.example.timesheet.ui.TaxesScreen
+import com.example.timesheet.ui.TaxEditDialog
+import com.example.timesheet.ui.TimeTypesScreen
+import com.example.timesheet.ui.TimeTypeEditDialog
+import com.example.timesheet.ui.UnitsScreen
+import com.example.timesheet.ui.formatMonth
 import kotlinx.coroutines.launch
-
+import java.time.LocalDate
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            TIMESHEETApp()
+            TimesheetApp()
         }
     }
 }
 
-/** Состояние диалога "новая/редактируемая запись" для организаций (просто имя). */
 data class DialogState(
     val editingId: String?,
     val initialName: String
 )
 
-/** Состояние диалога для сотрудника (имя + почасовая ставка). */
 data class EmployeeDialogState(
     val editingId: String?,
     val initialName: String,
     val initialRate: Double
 )
 
-/** Что именно добавляем через FAB-меню на главном экране. */
 data class AddEntryRequest(
     val title: String,
     val type: EntryType,
     val showHours: Boolean
 )
 
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TIMESHEETApp(viewModel: AppViewModel = viewModel()) {
+fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
     var shiftsMenuExpanded by remember { mutableStateOf(false) }
     var personMenuExpanded by remember { mutableStateOf(false) }
     var organizationsMenuExpanded by remember { mutableStateOf(false) }
@@ -134,6 +156,12 @@ fun TIMESHEETApp(viewModel: AppViewModel = viewModel()) {
     val openingBalance by viewModel.openingBalance.collectAsState()
     val cloudSyncEnabled by viewModel.cloudSyncEnabled.collectAsState()
     val syncStatus by viewModel.syncStatus.collectAsState()
+    val shiftTemplates by viewModel.shiftTemplates.collectAsState()
+    val surcharges by viewModel.surcharges.collectAsState()
+    val timeTypes by viewModel.timeTypes.collectAsState()
+    val expenseCategories by viewModel.expenseCategories.collectAsState()
+    val units by viewModel.units.collectAsState()
+    val taxes by viewModel.taxes.collectAsState()
 
     val breakdown = remember(entries, employees, currentMonth, selectedEmployeeId, selectedOrganizationId, openingBalance) {
         PayrollCalculator.calculate(
@@ -152,6 +180,24 @@ fun TIMESHEETApp(viewModel: AppViewModel = viewModel()) {
     var organizationDialogState by remember { mutableStateOf<DialogState?>(null) }
     var addEntryRequest by remember { mutableStateOf<AddEntryRequest?>(null) }
     var showIncomeDialog by remember { mutableStateOf(false) }
+    var editingEntry by remember { mutableStateOf<LedgerEntry?>(null) }
+
+    var showShiftTemplates by remember { mutableStateOf(false) }
+    var showSurchargeLibrary by remember { mutableStateOf(false) }
+    var editingSurcharge by remember { mutableStateOf<Surcharge?>(null) }
+    var editingShiftTemplate by remember { mutableStateOf<ShiftTemplate?>(null) }
+    var shiftTemplateToApply by remember { mutableStateOf<ShiftTemplate?>(null) }
+
+    var editingTimeType by remember { mutableStateOf<TimeType?>(null) }
+    var editingExpenseCategory by remember { mutableStateOf<ExpenseCategory?>(null) }
+    var editingTax by remember { mutableStateOf<Tax?>(null) }
+
+    // ===== НОВЫЕ СОСТОЯНИЯ ДЛЯ НАВИГАЦИИ =====
+    var showPeriodSettings by remember { mutableStateOf(false) }
+    var showShiftJournal by remember { mutableStateOf(false) }
+    var showFilterMenu by remember { mutableStateOf(false) }
+    var filterOrganizationId by remember { mutableStateOf<String?>(null) }
+    var filterEmployeeId by remember { mutableStateOf<String?>(null) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -218,6 +264,7 @@ fun TIMESHEETApp(viewModel: AppViewModel = viewModel()) {
                 onMenuClick = onMenuClick,
                 employees = employees,
                 organizations = organizations,
+                entries = entries,
                 currentMonth = currentMonth,
                 selectedEmployeeId = selectedEmployeeId,
                 selectedOrganizationId = selectedOrganizationId,
@@ -233,6 +280,9 @@ fun TIMESHEETApp(viewModel: AppViewModel = viewModel()) {
                 shiftsMenuExpanded = shiftsMenuExpanded,
                 onShiftsClick = { shiftsMenuExpanded = true },
                 onShiftsMenuDismiss = { shiftsMenuExpanded = false },
+                onOpenPeriodSettings = { currentScreen = "Настроить период" },
+                onOpenShiftJournal = { currentScreen = "Журнал смен" },
+                onOpenShiftTemplates = { showShiftTemplates = true },
                 addMenuExpanded = addMenuExpanded,
                 onAddClick = { addMenuExpanded = true },
                 onAddMenuDismiss = { addMenuExpanded = false },
@@ -240,9 +290,13 @@ fun TIMESHEETApp(viewModel: AppViewModel = viewModel()) {
                 onPreviousMonth = { viewModel.previousMonth() },
                 onNextMonth = { viewModel.nextMonth() },
                 onPickMonth = { viewModel.goToMonth(it) },
-                onIncomeClick = { showIncomeDialog = true }
+                onIncomeClick = { showIncomeDialog = true },
+                onEditEntry = { editingEntry = it },
+                onDeleteEntry = { id -> viewModel.deleteEntry(id) },
+                onRecalculateEntry = { id ->
+                    // TODO: логика пересчёта
+                }
             )
-
 
             "Отчеты" -> ReportsMenuScreen(
                 onMenuClick = onMenuClick,
@@ -256,12 +310,78 @@ fun TIMESHEETApp(viewModel: AppViewModel = viewModel()) {
                 onMenuClick = onMenuClick
             )
 
+            "Справочники/Типы времени" -> TimeTypesScreen(
+                timeTypes = timeTypes,
+                onMenuClick = onMenuClick,
+                onAdd = { editingTimeType = TimeType() },
+                onEdit = { editingTimeType = it },
+                onDelete = { viewModel.deleteTimeType(it) }
+            )
+
+            "Справочники/Категории расходов" -> ExpenseCategoriesScreen(
+                categories = expenseCategories,
+                onMenuClick = onMenuClick,
+                onAdd = { editingExpenseCategory = ExpenseCategory() },
+                onEdit = { editingExpenseCategory = it },
+                onDelete = { viewModel.deleteExpenseCategory(it) }
+            )
+
+            "Справочники/Единицы измерения" -> UnitsScreen(
+                units = units,
+                onMenuClick = onMenuClick
+            )
+
+            "Справочники/Налоги" -> TaxesScreen(
+                taxes = taxes,
+                onMenuClick = onMenuClick,
+                onAdd = { editingTax = Tax() },
+                onEdit = { editingTax = it },
+                onDelete = { viewModel.deleteTax(it) }
+            )
+
+            // ===== НОВЫЕ ЭКРАНЫ =====
+            "Настроить период" -> PeriodSettingsScreen(
+                onBack = { currentScreen = "Журнал расчетов" },
+                onApplyPeriod = { start, end ->
+                    // TODO: фильтровать записи по датам
+                    currentScreen = "Журнал расчетов"
+                },
+                onApplyQuickPeriod = { periodId ->
+                    // TODO: фильтровать записи по быстрому периоду
+                    currentScreen = "Журнал расчетов"
+                }
+            )
+
+            "Журнал смен" -> ShiftJournalScreen(
+                entries = entries,
+                employees = employees,
+                organizations = organizations,
+                onBack = { currentScreen = "Журнал расчетов" },
+                onFilterClick = { currentScreen = "Фильтр" },
+                onEditEntry = { editingEntry = it },
+                onDeleteEntry = { viewModel.deleteEntry(it) }
+            )
+
+            "Фильтр" -> FilterMenuScreen(
+                organizations = organizations,
+                employees = employees,
+                selectedOrganizationId = filterOrganizationId,
+                selectedEmployeeId = filterEmployeeId,
+                onBack = { currentScreen = "Журнал смен" },
+                onApplyFilter = { orgId, empId ->
+                    filterOrganizationId = orgId
+                    filterEmployeeId = empId
+                    // TODO: применить фильтр к журналу смен
+                }
+            )
 
             else -> PlaceholderScreen(
                 title = currentScreen.substringAfterLast("/"),
                 onMenuClick = onMenuClick
             )
         }
+
+        // ========== ДИАЛОГИ РЕДАКТИРОВАНИЯ ==========
 
         employeeDialogState?.let { state ->
             EmployeeEditDialog(
@@ -295,26 +415,193 @@ fun TIMESHEETApp(viewModel: AppViewModel = viewModel()) {
                 showHours = request.showHours,
                 employees = employees,
                 organizations = organizations,
+                expenseCategories = expenseCategories,
+                units = units,
                 preselectedEmployeeId = selectedEmployeeId,
                 preselectedOrganizationId = selectedOrganizationId,
                 onDismiss = { addEntryRequest = null },
                 onConfirm = { entry ->
-                    viewModel.addEntry(entry)
+                    val duplicate = entries.any {
+                        it.date == entry.date &&
+                                it.type == entry.type &&
+                                it.employeeId == entry.employeeId &&
+                                it.hours == entry.hours &&
+                                it.amount == entry.amount
+                    }
+                    if (!duplicate) {
+                        viewModel.addEntry(entry)
+                    }
                     addEntryRequest = null
+                }
+            )
+        }
+
+        editingEntry?.let { entry ->
+            AddEntryDialog(
+                title = "Редактировать запись",
+                entryType = entry.type,
+                showHours = entry.type == EntryType.SHIFT,
+                employees = employees,
+                organizations = organizations,
+                expenseCategories = expenseCategories,
+                units = units,
+                preselectedEmployeeId = entry.employeeId,
+                preselectedOrganizationId = entry.organizationId,
+                initialNote = entry.note,
+                initialDate = entry.date,
+                initialStartTime = entry.startTime,
+                initialEndTime = entry.endTime,
+                initialShiftType = entry.shiftType,
+                onDismiss = { editingEntry = null },
+                onConfirm = { updated ->
+                    viewModel.updateEntry(updated.copy(id = entry.id))
+                    editingEntry = null
                 }
             )
         }
 
         if (showIncomeDialog) {
             IncomeBreakdownDialog(
-                monthLabel = com.example.timesheet.ui.formatMonth(currentMonth),
+                monthLabel = formatMonth(currentMonth),
                 breakdown = breakdown,
                 onDismiss = { showIncomeDialog = false },
                 onOpeningBalanceChange = { viewModel.setOpeningBalance(it) }
             )
         }
+
+        // ========== ШАБЛОНЫ И ДОПЛАТЫ ==========
+
+        if (showShiftTemplates) {
+            ShiftTemplateListScreen(
+                templates = shiftTemplates,
+                onClose = { showShiftTemplates = false },
+                onAddNew = {
+                    editingShiftTemplate = ShiftTemplate()
+                    showShiftTemplates = false
+                },
+                onApply = { template ->
+                    shiftTemplateToApply = template
+                    showShiftTemplates = false
+                },
+                onEdit = { template ->
+                    editingShiftTemplate = template
+                    showShiftTemplates = false
+                },
+                onDelete = { id ->
+                    viewModel.deleteShiftTemplate(id)
+                }
+            )
+        }
+
+        editingShiftTemplate?.let { template ->
+            ShiftTemplateEditScreen(
+                initial = template,
+                employees = employees,
+                organizations = organizations,
+                allSurcharges = surcharges,
+                onClose = { editingShiftTemplate = null },
+                onSave = { updated ->
+                    viewModel.addOrUpdateShiftTemplate(updated)
+                    editingShiftTemplate = null
+                },
+                onDelete = if (template.id.isNotBlank() && !template.id.startsWith("builtin")) { id ->
+                    viewModel.deleteShiftTemplate(id)
+                    editingShiftTemplate = null
+                } else null,
+                onOpenSurchargeLibrary = { draft ->
+                    showSurchargeLibrary = true
+                    editingShiftTemplate = draft
+                }
+            )
+        }
+
+        if (showSurchargeLibrary) {
+            val currentTemplate = editingShiftTemplate ?: ShiftTemplate()
+            SurchargeListScreen(
+                surcharges = surcharges,
+                selectedIds = currentTemplate.surchargeIds.toSet(),
+                onToggle = { surchargeId ->
+                    val newIds = if (surchargeId in currentTemplate.surchargeIds) {
+                        currentTemplate.surchargeIds - surchargeId
+                    } else {
+                        currentTemplate.surchargeIds + surchargeId
+                    }
+                    editingShiftTemplate = currentTemplate.copy(surchargeIds = newIds)
+                },
+                onAddNew = {
+                    showSurchargeLibrary = false
+                    editingSurcharge = Surcharge()
+                },
+                onEditExisting = { surcharge ->
+                    editingSurcharge = surcharge
+                    showSurchargeLibrary = false
+                },
+                onClose = { showSurchargeLibrary = false }
+            )
+        }
+
+        editingSurcharge?.let { surcharge ->
+            SurchargeEditScreen(
+                initial = surcharge,
+                onClose = { editingSurcharge = null },
+                onSave = { updated ->
+                    viewModel.addOrUpdateSurcharge(updated)
+                    editingSurcharge = null
+                },
+                onDelete = if (!surcharge.isBuiltIn) { id ->
+                    viewModel.deleteSurcharge(id)
+                    editingSurcharge = null
+                } else null
+            )
+        }
+
+        shiftTemplateToApply?.let { template ->
+            addEntryRequest = AddEntryRequest(
+                title = "Смена по шаблону: ${template.name}",
+                type = EntryType.SHIFT,
+                showHours = true
+            )
+            shiftTemplateToApply = null
+        }
+
+        // ========== ДИАЛОГИ ДЛЯ СПРАВОЧНИКОВ ==========
+
+        editingTimeType?.let { type ->
+            TimeTypeEditDialog(
+                initial = type,
+                onDismiss = { editingTimeType = null },
+                onSave = { updated ->
+                    viewModel.addOrUpdateTimeType(updated)
+                    editingTimeType = null
+                }
+            )
+        }
+
+        editingExpenseCategory?.let { category ->
+            ExpenseCategoryEditDialog(
+                initial = category,
+                onDismiss = { editingExpenseCategory = null },
+                onSave = { updated ->
+                    viewModel.addOrUpdateExpenseCategory(updated)
+                    editingExpenseCategory = null
+                }
+            )
+        }
+
+        editingTax?.let { tax ->
+            TaxEditDialog(
+                initial = tax,
+                onDismiss = { editingTax = null },
+                onSave = { updated ->
+                    viewModel.addOrUpdateTax(updated)
+                    editingTax = null
+                }
+            )
+        }
     }
 }
+
+// ========== ОСТАЛЬНЫЕ ФУНКЦИИ ==========
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -322,6 +609,7 @@ fun MainScreen(
     onMenuClick: () -> Unit,
     employees: List<Employee>,
     organizations: List<Organization>,
+    entries: List<LedgerEntry>,
     currentMonth: java.time.YearMonth,
     selectedEmployeeId: String?,
     selectedOrganizationId: String?,
@@ -337,6 +625,9 @@ fun MainScreen(
     shiftsMenuExpanded: Boolean,
     onShiftsClick: () -> Unit,
     onShiftsMenuDismiss: () -> Unit,
+    onOpenPeriodSettings: () -> Unit,
+    onOpenShiftJournal: () -> Unit,
+    onOpenShiftTemplates: () -> Unit,
     addMenuExpanded: Boolean,
     onAddClick: () -> Unit,
     onAddMenuDismiss: () -> Unit,
@@ -344,7 +635,10 @@ fun MainScreen(
     onPreviousMonth: () -> Unit,
     onNextMonth: () -> Unit,
     onPickMonth: (java.time.YearMonth) -> Unit,
-    onIncomeClick: () -> Unit
+    onIncomeClick: () -> Unit,
+    onEditEntry: (LedgerEntry) -> Unit,
+    onDeleteEntry: (String) -> Unit,
+    onRecalculateEntry: (String) -> Unit
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -366,7 +660,10 @@ fun MainScreen(
                     onEmployeeSelect = onEmployeeSelect,
                     onShiftsClick = onShiftsClick,
                     shiftsMenuExpanded = shiftsMenuExpanded,
-                    onShiftsMenuDismiss = onShiftsMenuDismiss
+                    onShiftsMenuDismiss = onShiftsMenuDismiss,
+                    onOpenPeriodSettings = onOpenPeriodSettings,
+                    onOpenShiftJournal = onOpenShiftJournal,
+                    onOpenTemplates = onOpenShiftTemplates
                 )
                 MonthHeaderBar(
                     month = currentMonth,
@@ -374,10 +671,8 @@ fun MainScreen(
                     onNext = onNextMonth,
                     onPick = onPickMonth
                 )
+                IncomeBar(accrued = accrued, onClick = onIncomeClick)
             }
-        },
-        bottomBar = {
-            IncomeBar(accrued = accrued, onClick = onIncomeClick)
         },
         floatingActionButton = {
             AddFab(onClick = onAddClick)
@@ -395,11 +690,46 @@ fun MainScreen(
                         modifier = Modifier.padding(24.dp)
                     )
                 }
+            } else {
+                val filteredEntries = entries.filter { entry ->
+                    val inMonth = entry.date.year == currentMonth.year &&
+                            entry.date.month == currentMonth.month
+                    val employeeOk = selectedEmployeeId == null || entry.employeeId == selectedEmployeeId
+                    val orgOk = selectedOrganizationId == null || entry.organizationId == selectedOrganizationId
+                    inMonth && employeeOk && orgOk
+                }
+
+                if (filteredEntries.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Нет записей за выбранный период",
+                            modifier = Modifier.padding(24.dp)
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                    ) {
+                        items(filteredEntries.sortedByDescending { it.date }, key = { it.id }) { entry ->
+                            JournalEntryItem(
+                                entry = entry,
+                                employeeName = employees.find { it.id == entry.employeeId }?.name,
+                                organizationName = organizations.find { it.id == entry.organizationId }?.name,
+                                onEdit = { onEditEntry(it) },
+                                onDelete = { onDeleteEntry(it) },
+                                onRecalculate = { onRecalculateEntry(it) }
+                            )
+                        }
+                    }
+                }
             }
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(end = 24.dp, bottom = 24.dp),
+                    .padding(end = 16.dp, bottom = 80.dp),
                 contentAlignment = Alignment.BottomEnd
             ) {
                 AddMenu(
@@ -411,7 +741,6 @@ fun MainScreen(
         }
     }
 }
-
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -598,7 +927,6 @@ fun EntityListItem(
     }
 }
 
-/** Диалог организации: только имя. */
 @Composable
 fun EntityEditDialog(
     title: String,
@@ -632,7 +960,6 @@ fun EntityEditDialog(
     )
 }
 
-/** Диалог сотрудника: имя + почасовая ставка (используется в расчёте дохода). */
 @Composable
 fun EmployeeEditDialog(
     title: String,
@@ -725,7 +1052,6 @@ fun AppDrawerContent(
     currentScreen: String,
     onNavigate: (String) -> Unit
 ) {
-
     var referencesExpanded by remember { mutableStateOf(false) }
 
     ModalDrawerSheet(
@@ -758,7 +1084,6 @@ fun AppDrawerContent(
             selected = currentScreen == "Отчеты" || currentScreen.startsWith("Отчеты/"),
             onClick = { onNavigate("Отчеты") }
         )
-
 
         DrawerRow(
             title = "Справочники",
@@ -853,205 +1178,4 @@ fun DrawerRow(
             unselectedIconColor = Color.White
         )
     )
-}
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun AppTopBar(
-    onMenuClick: () -> Unit,
-    onOrganizationsClick: () -> Unit,
-    organizationsMenuExpanded: Boolean,
-    onOrganizationsMenuDismiss: () -> Unit,
-    organizations: List<Organization>,
-    selectedOrganizationId: String?,
-    onOrganizationSelect: (String?) -> Unit,
-    onPersonClick: () -> Unit,
-    personMenuExpanded: Boolean,
-    onPersonMenuDismiss: () -> Unit,
-    employees: List<Employee>,
-    selectedEmployeeId: String?,
-    onEmployeeSelect: (String?) -> Unit,
-    onShiftsClick: () -> Unit,
-    shiftsMenuExpanded: Boolean,
-    onShiftsMenuDismiss: () -> Unit
-) {
-    TopAppBar(
-        title = { },
-        navigationIcon = {
-            IconButton(onClick = onMenuClick) {
-                Icon(
-                    imageVector = Icons.Filled.Menu,
-                    contentDescription = "Меню",
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-        },
-        actions = {
-            Box {
-                IconButton(onClick = onOrganizationsClick) {
-                    Icon(
-                        imageVector = Icons.Filled.ShoppingBag,
-                        contentDescription = "Организация",
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-                OrganizationFilterMenu(
-                    expanded = organizationsMenuExpanded,
-                    onDismiss = onOrganizationsMenuDismiss,
-                    organizations = organizations,
-                    selectedId = selectedOrganizationId,
-                    onSelect = onOrganizationSelect
-                )
-            }
-            Box {
-                IconButton(onClick = onPersonClick) {
-                    Icon(
-                        imageVector = Icons.Filled.Person,
-                        contentDescription = "Сотрудник",
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-                EmployeeFilterMenu(
-                    expanded = personMenuExpanded,
-                    onDismiss = onPersonMenuDismiss,
-                    employees = employees,
-                    selectedId = selectedEmployeeId,
-                    onSelect = onEmployeeSelect
-                )
-            }
-            Box {
-                IconButton(onClick = onShiftsClick) {
-                    Icon(
-                        imageVector = Icons.Filled.MoreVert,
-                        contentDescription = "Смены",
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-                ShiftsMenu(
-                    expanded = shiftsMenuExpanded,
-                    onDismiss = onShiftsMenuDismiss
-                )
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = Color(0xFF5CA02F),
-            navigationIconContentColor = Color.White,
-            actionIconContentColor = Color.White
-        )
-    )
-}
-@Composable
-fun ShiftsMenu(
-    expanded: Boolean,
-    onDismiss: () -> Unit
-) {
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss
-    ) {
-        DropdownMenuItem(
-            text = { Text("Настроить период") },
-            onClick = {
-                onDismiss()
-            }
-        )
-        DropdownMenuItem(
-            text = { Text("Журнал смен") },
-            onClick = {
-                onDismiss()
-            }
-        )
-    }
-}
-
-
-@Composable
-fun AddFab(onClick: () -> Unit) {
-    androidx.compose.material3.FloatingActionButton(
-        onClick = onClick,
-        containerColor = Color(0xFFFF9800),
-        contentColor = Color.White
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Add,
-            contentDescription = "Добавить"
-        )
-    }
-}
-
-@Composable
-fun AddMenu(
-    expanded: Boolean,
-    onDismiss: () -> Unit,
-    onSelect: (AddEntryRequest) -> Unit
-) {
-    fun select(request: AddEntryRequest) {
-        onSelect(request)
-        onDismiss()
-    }
-
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss
-    ) {
-        DropdownMenuItem(
-            text = {
-                Row {
-                    Icon(imageVector = Icons.Filled.CreditCard, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Выплата")
-                }
-            },
-            onClick = { select(AddEntryRequest("Выплата", EntryType.PAYMENT, showHours = false)) }
-        )
-        DropdownMenuItem(
-            text = {
-                Row {
-                    Icon(imageVector = Icons.Filled.MoneyOff, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Налог")
-                }
-            },
-            onClick = { select(AddEntryRequest("Налог", EntryType.TAX, showHours = false)) }
-        )
-        DropdownMenuItem(
-            text = {
-                Row {
-                    Icon(imageVector = Icons.Filled.CalendarMonth, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Запись табеля")
-                }
-            },
-            onClick = { select(AddEntryRequest("Запись табеля", EntryType.SHIFT, showHours = true)) }
-        )
-        DropdownMenuItem(
-            text = {
-                Row {
-                    Icon(imageVector = Icons.Filled.AttachMoney, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Доплата, удержание")
-                }
-            },
-            onClick = { select(AddEntryRequest("Доплата (+) или удержание (-)", EntryType.ADJUSTMENT, showHours = false)) }
-        )
-        DropdownMenuItem(
-            text = {
-                Row {
-                    Icon(imageVector = Icons.Filled.Assignment, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Смена по шаблону")
-                }
-            },
-            onClick = { select(AddEntryRequest("Смена по шаблону", EntryType.SHIFT, showHours = true)) }
-        )
-        DropdownMenuItem(
-            text = {
-                Row {
-                    Icon(imageVector = Icons.Filled.PermContactCalendar, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Смена")
-                }
-            },
-            onClick = { select(AddEntryRequest("Смена", EntryType.SHIFT, showHours = true)) }
-        )
-    }
 }

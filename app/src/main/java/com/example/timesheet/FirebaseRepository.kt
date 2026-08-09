@@ -7,7 +7,6 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import java.time.LocalDate
 
-
 object FirebaseRepository {
 
     private val db by lazy { FirebaseFirestore.getInstance() }
