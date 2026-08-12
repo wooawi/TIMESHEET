@@ -38,6 +38,10 @@ fun AddFab(onClick: () -> Unit) {
     }
 }
 
+/**
+ * ИЗМЕНЕНО (ТЗ): убран пункт «Расход» из меню по нажатию «+».
+ * Добавление расхода теперь возможно только другими способами (если потребуются в будущем).
+ */
 @Composable
 fun AddMenu(
     expanded: Boolean,
@@ -144,19 +148,6 @@ fun AddMenu(
             onClick = { select(AddEntryRequest("Смена", EntryType.SHIFT, showHours = true)) }
         )
 
-        DropdownMenuItem(
-            text = {
-                Row {
-                    Icon(
-                        imageVector = Icons.Filled.MoneyOff,
-                        contentDescription = null,
-                        tint = Color(0xFFFF5722)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text("Расход")
-                }
-            },
-            onClick = { select(AddEntryRequest("Расход", EntryType.EXPENSE, showHours = false)) }
-        )
+        // Пункт «Расход» удалён согласно ТЗ.
     }
 }

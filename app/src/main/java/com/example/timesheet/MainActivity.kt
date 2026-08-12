@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
@@ -32,8 +31,6 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.MoneyOff
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PermContactCalendar
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.ShoppingBag
@@ -41,8 +38,6 @@ import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -87,20 +82,19 @@ import com.example.timesheet.ui.AddFab
 import com.example.timesheet.ui.AddMenu
 import com.example.timesheet.ui.AppTopBar
 import com.example.timesheet.ui.BackupsScreen
-import com.example.timesheet.ui.EmployeeFilterMenu
 import com.example.timesheet.ui.ExpenseCategoriesScreen
 import com.example.timesheet.ui.ExpenseCategoryEditDialog
+import com.example.timesheet.ui.ExpensesReportScreen
 import com.example.timesheet.ui.FilterMenuScreen
 import com.example.timesheet.ui.IncomeBar
 import com.example.timesheet.ui.IncomeBreakdownDialog
 import com.example.timesheet.ui.JournalEntryItem
 import com.example.timesheet.ui.MonthHeaderBar
-import com.example.timesheet.ui.OrganizationFilterMenu
+import com.example.timesheet.ui.PayslipReportScreen
 import com.example.timesheet.ui.PeriodSettingsScreen
 import com.example.timesheet.ui.ShiftJournalScreen
 import com.example.timesheet.ui.ShiftTemplateEditScreen
 import com.example.timesheet.ui.ShiftTemplateListScreen
-import com.example.timesheet.ui.ShiftsMenu
 import com.example.timesheet.ui.SurchargeEditScreen
 import com.example.timesheet.ui.SurchargeListScreen
 import com.example.timesheet.ui.TaxesScreen
@@ -108,9 +102,12 @@ import com.example.timesheet.ui.TaxEditDialog
 import com.example.timesheet.ui.TimeTypesScreen
 import com.example.timesheet.ui.TimeTypeEditDialog
 import com.example.timesheet.ui.UnitsScreen
+import com.example.timesheet.ui.WorkHoursReportScreen
 import com.example.timesheet.ui.formatMonth
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.YearMonth
+import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -265,6 +262,7 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                 employees = employees,
                 organizations = organizations,
                 entries = entries,
+                timeTypes = timeTypes,
                 currentMonth = currentMonth,
                 selectedEmployeeId = selectedEmployeeId,
                 selectedOrganizationId = selectedOrganizationId,
@@ -343,11 +341,11 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
             "Настроить период" -> PeriodSettingsScreen(
                 onBack = { currentScreen = "Журнал расчетов" },
                 onApplyPeriod = { start, end ->
-                    // TODO: фильтровать записи по датам
+                    viewModel.setReportPeriod(start, end)
                     currentScreen = "Журнал расчетов"
                 },
                 onApplyQuickPeriod = { periodId ->
-                    // TODO: фильтровать записи по быстрому периоду
+                    viewModel.applyQuickReportPeriod(periodId)
                     currentScreen = "Журнал расчетов"
                 }
             )
@@ -356,6 +354,11 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                 entries = entries,
                 employees = employees,
                 organizations = organizations,
+                timeTypes = timeTypes,
+                periodStart = viewModel.reportPeriodStart.value,
+                periodEnd = viewModel.reportPeriodEnd.value,
+                filterOrganizationId = filterOrganizationId,
+                filterEmployeeId = filterEmployeeId,
                 onBack = { currentScreen = "Журнал расчетов" },
                 onFilterClick = { currentScreen = "Фильтр" },
                 onEditEntry = { editingEntry = it },
@@ -371,8 +374,28 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                 onApplyFilter = { orgId, empId ->
                     filterOrganizationId = orgId
                     filterEmployeeId = empId
-                    // TODO: применить фильтр к журналу смен
                 }
+            )
+
+            "Отчеты/Расчетный лист" -> PayslipReportScreen(
+                viewModel = viewModel,
+                employees = employees,
+                organizations = organizations,
+                onBack = { currentScreen = "Отчеты" }
+            )
+
+            "Отчеты/Рабочее время по проектам" -> WorkHoursReportScreen(
+                viewModel = viewModel,
+                employees = employees,
+                organizations = organizations,
+                onBack = { currentScreen = "Отчеты" }
+            )
+
+            "Отчеты/Расходы" -> ExpensesReportScreen(
+                viewModel = viewModel,
+                employees = employees,
+                organizations = organizations,
+                onBack = { currentScreen = "Отчеты" }
             )
 
             else -> PlaceholderScreen(
@@ -610,6 +633,7 @@ fun MainScreen(
     employees: List<Employee>,
     organizations: List<Organization>,
     entries: List<LedgerEntry>,
+    timeTypes: List<TimeType>,
     currentMonth: java.time.YearMonth,
     selectedEmployeeId: String?,
     selectedOrganizationId: String?,
@@ -634,7 +658,7 @@ fun MainScreen(
     onAddEntryRequest: (AddEntryRequest) -> Unit,
     onPreviousMonth: () -> Unit,
     onNextMonth: () -> Unit,
-    onPickMonth: (java.time.YearMonth) -> Unit,
+    onPickMonth: (YearMonth) -> Unit,
     onIncomeClick: () -> Unit,
     onEditEntry: (LedgerEntry) -> Unit,
     onDeleteEntry: (String) -> Unit,
@@ -717,9 +741,11 @@ fun MainScreen(
                                 entry = entry,
                                 employeeName = employees.find { it.id == entry.employeeId }?.name,
                                 organizationName = organizations.find { it.id == entry.organizationId }?.name,
+                                timeTypes = timeTypes,
                                 onEdit = { onEditEntry(it) },
                                 onDelete = { onDeleteEntry(it) },
-                                onRecalculate = { onRecalculateEntry(it) }
+                                onRecalculate = { onRecalculateEntry(it) },
+                                onAttachments = { /* TODO: открыть диалог выбора файла/фото */ }
                             )
                         }
                     }

@@ -50,6 +50,7 @@ fun AddEntryDialog(
     initialStartTime: LocalTime? = LocalTime.of(8, 0),
     initialEndTime: LocalTime? = LocalTime.of(17, 0),
     initialShiftType: ShiftType = ShiftType.DAY,
+    initialSurchargeIds: List<String> = emptyList(),
     onDismiss: () -> Unit,
     onConfirm: (LedgerEntry) -> Unit
 ) {
@@ -160,15 +161,17 @@ fun AddEntryDialog(
                         ) {
                             ShiftType.values().forEach { type ->
                                 DropdownMenuItem(
-                                    text = { Text(
-                                        when (type) {
-                                            ShiftType.DAY -> "Дневная"
-                                            ShiftType.NIGHT -> "Ночная"
-                                            ShiftType.HOLIDAY -> "Праздничная"
-                                            ShiftType.OVERTIME -> "Сверхурочная"
-                                            ShiftType.WEEKEND -> "Выходной день"
-                                        }
-                                    )},
+                                    text = {
+                                        Text(
+                                            when (type) {
+                                                ShiftType.DAY -> "Дневная"
+                                                ShiftType.NIGHT -> "Ночная"
+                                                ShiftType.HOLIDAY -> "Праздничная"
+                                                ShiftType.OVERTIME -> "Сверхурочная"
+                                                ShiftType.WEEKEND -> "Выходной день"
+                                            }
+                                        )
+                                    },
                                     onClick = {
                                         shiftType = type
                                         shiftTypeMenuOpen = false
@@ -380,7 +383,8 @@ fun AddEntryDialog(
                         note = noteText,
                         expenseCategoryId = expenseCategoryId,
                         unitId = unitId,
-                        quantity = quantity
+                        quantity = quantity,
+                        surchargeIds = initialSurchargeIds
                     )
                 )
             }) {

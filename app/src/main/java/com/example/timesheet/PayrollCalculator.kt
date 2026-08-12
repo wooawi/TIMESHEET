@@ -1,5 +1,6 @@
 package com.example.timesheet.data
 
+import java.time.LocalDate
 import java.time.YearMonth
 
 data class PayrollBreakdown(
@@ -16,21 +17,56 @@ data class PayrollBreakdown(
 
 object PayrollCalculator {
 
+    /**
+     * Сохранён старый метод (расчёт за календарный месяц), используется на главном экране.
+     * ИЗМЕНЕНО: теперь принимает справочник доплат, чтобы они реально участвовали в начислении
+     * (раньше Surcharge/ShiftTemplate.surchargeIds нигде не влияли на сумму — это и была
+     * основная ошибка в математике).
+     */
     fun calculate(
         entries: List<LedgerEntry>,
         employees: List<Employee>,
         month: YearMonth,
         employeeFilter: String?,
         organizationFilter: String?,
+        openingBalance: Double,
+        surcharges: List<Surcharge> = emptyList()
+    ): PayrollBreakdown {
+        return calculateForPeriod(
+            entries = entries,
+            employees = employees,
+            surcharges = surcharges,
+            start = month.atDay(1),
+            end = month.atEndOfMonth(),
+            employeeFilter = employeeFilter,
+            organizationFilter = organizationFilter,
+            openingBalance = openingBalance
+        )
+    }
+
+    /**
+     * ДОБАВЛЕНО (ТЗ): расчёт за произвольный период — используется в «Настроить период»,
+     * «Журнал смен» и во всех трёх отчётах («Расчетный лист», «Рабочее время по периодам»,
+     * «Расходы»), а не только за календарный месяц, как было раньше.
+     */
+    fun calculateForPeriod(
+        entries: List<LedgerEntry>,
+        employees: List<Employee>,
+        surcharges: List<Surcharge>,
+        start: LocalDate,
+        end: LocalDate,
+        employeeFilter: String?,
+        organizationFilter: String?,
         openingBalance: Double
     ): PayrollBreakdown {
         val filtered = entries.filter { entry ->
-            YearMonth.from(entry.date) == month &&
+            !entry.date.isBefore(start) && !entry.date.isAfter(end) &&
                     (employeeFilter == null || entry.employeeId == employeeFilter) &&
                     (organizationFilter == null || entry.organizationId == organizationFilter)
         }
 
         val rateByEmployee = employees.associateBy({ it.id }, { it.hourlyRate })
+        val surchargeById = surcharges.associateBy { it.id }
 
         var accrued = 0.0
         var payments = 0.0
@@ -52,7 +88,25 @@ object PayrollCalculator {
                         ShiftType.OVERTIME -> 1.5
                         ShiftType.WEEKEND -> 1.5
                     }
-                    accrued += hours * rate * multiplier
+                    val base = hours * rate * multiplier
+
+                    // Доплаты/удержания, привязанные к смене (см. Models.kt: LedgerEntry.surchargeIds)
+                    var shiftTotal = base
+                    entry.surchargeIds.forEach surchargeLoop@{ surchargeId ->
+                        val surcharge = surchargeById[surchargeId] ?: return@surchargeLoop
+                        val weekdayOk = surcharge.activeWeekdays.isEmpty() ||
+                                surcharge.activeWeekdays.contains(entry.date.dayOfWeek.value)
+                        if (!weekdayOk) return@surchargeLoop
+
+                        val contribution = when (surcharge.calcType) {
+                            SurchargeCalcType.FIXED_PER_SHIFT -> surcharge.amount
+                            SurchargeCalcType.PER_HOUR -> surcharge.amount * hours
+                            SurchargeCalcType.PERCENT -> base * (surcharge.amount / 100.0)
+                        }
+                        shiftTotal += if (surcharge.kind == SurchargeKind.BONUS) contribution else -contribution
+                    }
+
+                    accrued += shiftTotal
                 }
                 EntryType.PAYMENT -> payments += entry.amount
                 EntryType.TAX -> taxes += entry.amount

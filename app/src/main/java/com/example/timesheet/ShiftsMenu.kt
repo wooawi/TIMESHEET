@@ -11,7 +11,7 @@ fun ShiftsMenu(
     onDismiss: () -> Unit,
     onOpenPeriodSettings: () -> Unit = {},
     onOpenShiftJournal: () -> Unit = {},
-    onOpenTemplates: () -> Unit = {}
+    onOpenTemplates: () -> Unit = {} // параметр оставлен для совместимости
 ) {
     DropdownMenu(
         expanded = expanded,
@@ -31,12 +31,6 @@ fun ShiftsMenu(
                 onOpenShiftJournal()
             }
         )
-        DropdownMenuItem(
-            text = { Text("Шаблоны смен") },
-            onClick = {
-                onDismiss()
-                onOpenTemplates()
-            }
-        )
+        // Пункт "Шаблоны смен" удален согласно ТЗ
     }
 }

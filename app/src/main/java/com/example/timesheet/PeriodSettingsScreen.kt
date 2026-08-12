@@ -41,64 +41,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.timesheet.data.getQuickPeriods
+import com.example.timesheet.data.QuickPeriod
 import java.time.Instant
 import java.time.LocalDate
-import java.time.YearMonth
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-// ========== МОДЕЛЬ ДЛЯ БЫСТРЫХ ПЕРИОДОВ ==========
-data class QuickPeriod(
-    val id: String,
-    val name: String,
-    val getRange: () -> Pair<LocalDate, LocalDate>
-)
-
-// ========== ПРЕДУСТАНОВЛЕННЫЕ БЫСТРЫЕ ПЕРИОДЫ ==========
-fun getQuickPeriods(): List<QuickPeriod> = listOf(
-    QuickPeriod("today", "Сегодня") {
-        val today = LocalDate.now()
-        today to today
-    },
-    QuickPeriod("this_week", "Эта неделя") {
-        val today = LocalDate.now()
-        val start = today.minusDays(today.dayOfWeek.value - 1L)
-        start to today
-    },
-    QuickPeriod("this_month", "Этот месяц") {
-        val today = LocalDate.now()
-        val start = today.withDayOfMonth(1)
-        start to today
-    },
-    QuickPeriod("this_year", "Этот год") {
-        val today = LocalDate.now()
-        val start = today.withDayOfYear(1)
-        start to today
-    },
-    QuickPeriod("yesterday", "Вчера") {
-        val yesterday = LocalDate.now().minusDays(1)
-        yesterday to yesterday
-    },
-    QuickPeriod("last_month", "Прошлый месяц") {
-        val lastMonth = YearMonth.now().minusMonths(1)
-        val start = lastMonth.atDay(1)
-        val end = lastMonth.atEndOfMonth()
-        start to end
-    },
-    QuickPeriod("last_year", "Прошлый год") {
-        val lastYear = YearMonth.now().minusYears(1)
-        val start = lastYear.atDay(1)
-        val end = lastYear.atEndOfMonth()
-        start to end
-    },
-    QuickPeriod("all_time", "Весь период") {
-        val start = LocalDate.of(2000, 1, 1)
-        val end = LocalDate.now()
-        start to end
-    }
-)
-
-// ========== ЭКРАН НАСТРОЙКИ ПЕРИОДА ==========
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PeriodSettingsScreen(
@@ -113,6 +62,7 @@ fun PeriodSettingsScreen(
     var selectedQuickPeriod by remember { mutableStateOf<String?>("this_month") }
 
     val dateFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
+    val dateFormatterFull = DateTimeFormatter.ofPattern("d MMMM yyyy г. EEE")
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -140,11 +90,18 @@ fun PeriodSettingsScreen(
                 .padding(innerPadding)
                 .padding(16.dp)
         ) {
-            // ===== БЫСТРЫЕ ПЕРИОДЫ =====
+            Text(
+                text = "Расчетный период",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF333333),
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
             Text(
                 text = "Быстрые периоды",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
                 color = Color(0xFF5CA02F),
                 modifier = Modifier.padding(bottom = 8.dp)
             )
@@ -152,7 +109,7 @@ fun PeriodSettingsScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(250.dp)
+                    .height(200.dp)
             ) {
                 items(getQuickPeriods()) { period ->
                     QuickPeriodItem(
@@ -171,54 +128,135 @@ fun PeriodSettingsScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // ===== ВЫБОР ДАТ =====
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "С",
+                        fontSize = 12.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    OutlinedTextField(
+                        value = startDate.format(dateFormatter),
+                        onValueChange = {},
+                        label = { Text("Дата") },
+                        readOnly = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = {
+                            TextButton(
+                                onClick = { showStartDatePicker = true },
+                                modifier = Modifier.padding(0.dp)
+                            ) {
+                                Text("📅", fontSize = 20.sp)
+                            }
+                        }
+                    )
+                    Text(
+                        text = startDate.format(dateFormatterFull),
+                        fontSize = 11.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "По",
+                        fontSize = 12.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    OutlinedTextField(
+                        value = endDate.format(dateFormatter),
+                        onValueChange = {},
+                        label = { Text("Дата") },
+                        readOnly = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = {
+                            TextButton(
+                                onClick = { showEndDatePicker = true },
+                                modifier = Modifier.padding(0.dp)
+                            ) {
+                                Text("📅", fontSize = 20.sp)
+                            }
+                        }
+                    )
+                    Text(
+                        text = endDate.format(dateFormatterFull),
+                        fontSize = 11.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
             Text(
-                text = "Произвольный период",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
+                text = "Границы периода",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
                 color = Color(0xFF5CA02F),
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
-            Row(
+            Card(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFFF5F5F5)
+                )
             ) {
-                OutlinedTextField(
-                    value = startDate.format(dateFormatter),
-                    onValueChange = {},
-                    label = { Text("От") },
-                    readOnly = true,
-                    modifier = Modifier.weight(1f),
-                    trailingIcon = {
-                        TextButton(
-                            onClick = { showStartDatePicker = true }
-                        ) {
-                            Text("📅")
-                        }
+                Column(
+                    modifier = Modifier.padding(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Граница предыдущего периода",
+                            fontSize = 13.sp,
+                            color = Color.Gray
+                        )
+                        Text(
+                            text = "${startDate.minusDays(1).format(dateFormatter)}  23:59",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF333333)
+                        )
                     }
-                )
 
-                OutlinedTextField(
-                    value = endDate.format(dateFormatter),
-                    onValueChange = {},
-                    label = { Text("До") },
-                    readOnly = true,
-                    modifier = Modifier.weight(1f),
-                    trailingIcon = {
-                        TextButton(
-                            onClick = { showEndDatePicker = true }
-                        ) {
-                            Text("📅")
-                        }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Граница следующего периода",
+                            fontSize = 13.sp,
+                            color = Color.Gray
+                        )
+                        Text(
+                            text = "${endDate.plusDays(1).format(dateFormatter)}  00:00",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF333333)
+                        )
                     }
-                )
+                }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.weight(1f))
 
             Button(
                 onClick = {
+                    selectedQuickPeriod = null
                     onApplyPeriod(startDate, endDate)
                 },
                 modifier = Modifier
@@ -236,70 +274,69 @@ fun PeriodSettingsScreen(
                 )
             }
         }
-    }
 
-    if (showStartDatePicker) {
-        val datePickerState = rememberDatePickerState(
-            initialSelectedDateMillis = startDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        )
-        DatePickerDialog(
-            onDismissRequest = { showStartDatePicker = false },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        datePickerState.selectedDateMillis?.let { millis ->
-                            startDate = Instant.ofEpochMilli(millis)
-                                .atZone(ZoneId.systemDefault())
-                                .toLocalDate()
+        if (showStartDatePicker) {
+            val datePickerState = rememberDatePickerState(
+                initialSelectedDateMillis = startDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            )
+            DatePickerDialog(
+                onDismissRequest = { showStartDatePicker = false },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            datePickerState.selectedDateMillis?.let { millis ->
+                                startDate = Instant.ofEpochMilli(millis)
+                                    .atZone(ZoneId.systemDefault())
+                                    .toLocalDate()
+                            }
+                            showStartDatePicker = false
                         }
-                        showStartDatePicker = false
+                    ) {
+                        Text("Выбрать")
                     }
-                ) {
-                    Text("Выбрать")
+                },
+                dismissButton = {
+                    TextButton(onClick = { showStartDatePicker = false }) {
+                        Text("Отмена")
+                    }
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showStartDatePicker = false }) {
-                    Text("Отмена")
-                }
+            ) {
+                DatePicker(state = datePickerState)
             }
-        ) {
-            DatePicker(state = datePickerState)
         }
-    }
 
-    if (showEndDatePicker) {
-        val datePickerState = rememberDatePickerState(
-            initialSelectedDateMillis = endDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        )
-        DatePickerDialog(
-            onDismissRequest = { showEndDatePicker = false },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        datePickerState.selectedDateMillis?.let { millis ->
-                            endDate = Instant.ofEpochMilli(millis)
-                                .atZone(ZoneId.systemDefault())
-                                .toLocalDate()
+        if (showEndDatePicker) {
+            val datePickerState = rememberDatePickerState(
+                initialSelectedDateMillis = endDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            )
+            DatePickerDialog(
+                onDismissRequest = { showEndDatePicker = false },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            datePickerState.selectedDateMillis?.let { millis ->
+                                endDate = Instant.ofEpochMilli(millis)
+                                    .atZone(ZoneId.systemDefault())
+                                    .toLocalDate()
+                            }
+                            showEndDatePicker = false
                         }
-                        showEndDatePicker = false
+                    ) {
+                        Text("Выбрать")
                     }
-                ) {
-                    Text("Выбрать")
+                },
+                dismissButton = {
+                    TextButton(onClick = { showEndDatePicker = false }) {
+                        Text("Отмена")
+                    }
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showEndDatePicker = false }) {
-                    Text("Отмена")
-                }
+            ) {
+                DatePicker(state = datePickerState)
             }
-        ) {
-            DatePicker(state = datePickerState)
         }
     }
 }
 
-// ========== ЭЛЕМЕНТ БЫСТРОГО ПЕРИОДА ==========
 @Composable
 fun QuickPeriodItem(
     period: QuickPeriod,
@@ -310,7 +347,7 @@ fun QuickPeriodItem(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .padding(vertical = 4.dp),
+            .padding(vertical = 2.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) Color(0xFFE8F5E9) else Color.White
         ),
@@ -319,13 +356,13 @@ fun QuickPeriodItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = period.name,
-                fontSize = 16.sp,
+                fontSize = 15.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                 color = if (isSelected) Color(0xFF2E7D32) else Color.Black
             )

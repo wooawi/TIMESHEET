@@ -46,7 +46,10 @@ data class LedgerEntry(
     val note: String = "",
     val expenseCategoryId: String? = null,
     val unitId: String? = null,
-    val quantity: Double = 0.0
+    val quantity: Double = 0.0,
+    // ДОБАВЛЕНО (ТЗ «настроить правильную математику»): доплаты/удержания,
+    // применённые к этой смене (переносятся из шаблона смены при применении).
+    val surchargeIds: List<String> = emptyList()
 ) {
     fun calculateHours(): Double {
         if (startTime == null || endTime == null) return hours
@@ -93,14 +96,12 @@ data class Tax(
 
 // ========== ФАБРИКИ ПРЕДУСТАНОВЛЕННЫХ ДАННЫХ ==========
 
-// ТОЛЬКО ЕДИНИЦЫ ИЗМЕРЕНИЯ - ПРЕДУСТАНОВЛЕННЫЕ
 fun defaultUnits(): List<UnitOfMeasure> = listOf(
     UnitOfMeasure("unit_km", "Километр", "км"),
     UnitOfMeasure("unit_hour", "Час", "ч"),
     UnitOfMeasure("unit_piece", "Штука", "шт")
 )
 
-// Остальные справочники - ПУСТЫЕ
 fun defaultTimeTypes(): List<TimeType> = emptyList()
 fun defaultExpenseCategories(): List<ExpenseCategory> = emptyList()
 fun defaultTaxes(): List<Tax> = emptyList()

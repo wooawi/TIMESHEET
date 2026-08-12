@@ -91,6 +91,8 @@ object BackupManager {
                 put("expenseCategoryId", it.expenseCategoryId ?: JSONObject.NULL)
                 put("unitId", it.unitId ?: JSONObject.NULL)
                 put("quantity", it.quantity)
+                // ДОБАВЛЕНО: сохраняем доплаты, привязанные к смене
+                put("surchargeIds", JSONArray(it.surchargeIds))
             })
         }
         root.put("entries", entries)
@@ -125,7 +127,6 @@ object BackupManager {
         }
         root.put("shiftTemplates", shiftTemplates)
 
-        // Новые справочники
         val timeTypes = JSONArray()
         state.timeTypes.forEach {
             timeTypes.put(JSONObject().apply {
@@ -200,6 +201,10 @@ object BackupManager {
         root.optJSONArray("entries")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
+                val surchargeIds = mutableListOf<String>()
+                o.optJSONArray("surchargeIds")?.let { ids ->
+                    for (j in 0 until ids.length()) surchargeIds.add(ids.getString(j))
+                }
                 entries.add(
                     LedgerEntry(
                         id = o.getString("id"),
@@ -212,7 +217,8 @@ object BackupManager {
                         note = o.optString("note", ""),
                         expenseCategoryId = if (o.isNull("expenseCategoryId")) null else o.getString("expenseCategoryId"),
                         unitId = if (o.isNull("unitId")) null else o.getString("unitId"),
-                        quantity = o.optDouble("quantity", 0.0)
+                        quantity = o.optDouble("quantity", 0.0),
+                        surchargeIds = surchargeIds
                     )
                 )
             }
@@ -264,7 +270,6 @@ object BackupManager {
             }
         }
 
-        // Новые справочники
         val timeTypes = mutableListOf<TimeType>()
         root.optJSONArray("timeTypes")?.let { arr ->
             for (i in 0 until arr.length()) {

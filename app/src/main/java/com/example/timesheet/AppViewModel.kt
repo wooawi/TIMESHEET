@@ -9,7 +9,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
+import java.time.LocalDate
 import java.time.YearMonth
+import com.example.timesheet.data.getQuickPeriods
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -60,7 +62,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _taxes = MutableStateFlow<List<Tax>>(defaultTaxes())
     val taxes: StateFlow<List<Tax>> = _taxes.asStateFlow()
 
-    private val snapshotFile: File by lazy { File(getApplication<Application>().filesDir, "app_state.json") }
+    // ДОБАВЛЕНО (ТЗ): единый выбранный период для «Настроить период» -> «Журнал смен» -> отчёты.
+    private val _reportPeriodStart = MutableStateFlow(YearMonth.now().atDay(1))
+    val reportPeriodStart: StateFlow<LocalDate> = _reportPeriodStart.asStateFlow()
+
+    private val _reportPeriodEnd = MutableStateFlow(LocalDate.now())
+    val reportPeriodEnd: StateFlow<LocalDate> = _reportPeriodEnd.asStateFlow()
+
+    private val _reportQuickPeriodId = MutableStateFlow<String?>("this_month")
+    val reportQuickPeriodId: StateFlow<String?> = _reportQuickPeriodId.asStateFlow()
+
+    fun setReportPeriod(start: LocalDate, end: LocalDate) {
+        _reportPeriodStart.value = start
+        _reportPeriodEnd.value = end
+        _reportQuickPeriodId.value = null
+        persistLocalSnapshot()
+    }
+
+    fun applyQuickReportPeriod(periodId: String) {
+        val period = getQuickPeriods().find { it.id == periodId } ?: return
+        val (start, end) = period.getRange()
+        _reportPeriodStart.value = start
+        _reportPeriodEnd.value = end
+        _reportQuickPeriodId.value = periodId
+        persistLocalSnapshot()
+    }
+
+    private val snapshotFile: File by lazy {
+        File(getApplication<Application>().filesDir, "app_state.json")
+    }
 
     init {
         loadLocalSnapshot()
@@ -245,7 +275,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         month = _currentMonth.value,
         employeeFilter = _selectedEmployeeId.value,
         organizationFilter = _selectedOrganizationId.value,
-        openingBalance = _openingBalance.value
+        openingBalance = _openingBalance.value,
+        surcharges = _surcharges.value
     )
 
     // ========== FIREBASE ==========
@@ -300,6 +331,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         put("selectedEmployeeId", _selectedEmployeeId.value ?: JSONObject.NULL)
         put("selectedOrganizationId", _selectedOrganizationId.value ?: JSONObject.NULL)
         put("currentMonth", _currentMonth.value.toString())
+        put("reportPeriodStart", _reportPeriodStart.value.toString())
+        put("reportPeriodEnd", _reportPeriodEnd.value.toString())
+        put("reportQuickPeriodId", _reportQuickPeriodId.value ?: JSONObject.NULL)
     }
 
     fun createBackup(label: String? = null): File =
@@ -320,6 +354,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _units.value = state.units.ifEmpty { defaultUnits() }
         _taxes.value = state.taxes.ifEmpty { defaultTaxes() }
 
+        applySettingsJson(settings)
+        persistLocalSnapshot()
+    }
+
+    fun deleteBackup(file: File) = BackupManager.deleteBackup(file)
+
+    private fun applySettingsJson(settings: JSONObject) {
         if (!settings.isNull("selectedEmployeeId")) {
             _selectedEmployeeId.value = settings.optString("selectedEmployeeId").takeIf { it.isNotBlank() }
         }
@@ -327,11 +368,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _selectedOrganizationId.value = settings.optString("selectedOrganizationId").takeIf { it.isNotBlank() }
         }
         runCatching { _currentMonth.value = YearMonth.parse(settings.optString("currentMonth")) }
+        runCatching { _reportPeriodStart.value = LocalDate.parse(settings.optString("reportPeriodStart")) }
+        runCatching { _reportPeriodEnd.value = LocalDate.parse(settings.optString("reportPeriodEnd")) }
+        if (!settings.isNull("reportQuickPeriodId")) {
+            _reportQuickPeriodId.value = settings.optString("reportQuickPeriodId").takeIf { it.isNotBlank() }
+        }
         _cloudSyncEnabled.value = settings.optBoolean("cloudSyncEnabled", false)
-        persistLocalSnapshot()
     }
-
-    fun deleteBackup(file: File) = BackupManager.deleteBackup(file)
 
     private fun persistLocalSnapshot() {
         runCatching {
@@ -359,14 +402,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _taxes.value = state.taxes.ifEmpty { defaultTaxes() }
 
                 val settings = root.optJSONObject("settings") ?: JSONObject()
-                _cloudSyncEnabled.value = settings.optBoolean("cloudSyncEnabled", false)
-                if (!settings.isNull("selectedEmployeeId")) {
-                    _selectedEmployeeId.value = settings.optString("selectedEmployeeId").takeIf { it.isNotBlank() }
-                }
-                if (!settings.isNull("selectedOrganizationId")) {
-                    _selectedOrganizationId.value = settings.optString("selectedOrganizationId").takeIf { it.isNotBlank() }
-                }
-                runCatching { _currentMonth.value = YearMonth.parse(settings.optString("currentMonth")) }
+                applySettingsJson(settings)
             }
         }
     }
