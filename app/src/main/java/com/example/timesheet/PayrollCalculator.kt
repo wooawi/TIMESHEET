@@ -19,9 +19,6 @@ object PayrollCalculator {
 
     /**
      * Сохранён старый метод (расчёт за календарный месяц), используется на главном экране.
-     * ИЗМЕНЕНО: теперь принимает справочник доплат, чтобы они реально участвовали в начислении
-     * (раньше Surcharge/ShiftTemplate.surchargeIds нигде не влияли на сумму — это и была
-     * основная ошибка в математике).
      */
     fun calculate(
         entries: List<LedgerEntry>,
@@ -46,8 +43,7 @@ object PayrollCalculator {
 
     /**
      * ДОБАВЛЕНО (ТЗ): расчёт за произвольный период — используется в «Настроить период»,
-     * «Журнал смен» и во всех трёх отчётах («Расчетный лист», «Рабочее время по периодам»,
-     * «Расходы»), а не только за календарный месяц, как было раньше.
+     * «Журнал смен» и во всех трёх отчётах, а не только за календарный месяц.
      */
     fun calculateForPeriod(
         entries: List<LedgerEntry>,
@@ -66,7 +62,6 @@ object PayrollCalculator {
         }
 
         val rateByEmployee = employees.associateBy({ it.id }, { it.hourlyRate })
-        val surchargeById = surcharges.associateBy { it.id }
 
         var accrued = 0.0
         var payments = 0.0
@@ -78,35 +73,9 @@ object PayrollCalculator {
         filtered.forEach { entry ->
             when (entry.type) {
                 EntryType.SHIFT -> {
-                    val hours = entry.calculateHours()
-                    totalHours += hours
+                    totalHours += entry.calculatePaidHours()
                     val rate = entry.employeeId?.let { rateByEmployee[it] } ?: 0.0
-                    val multiplier = when (entry.shiftType) {
-                        ShiftType.DAY -> 1.0
-                        ShiftType.NIGHT -> 1.4
-                        ShiftType.HOLIDAY -> 2.0
-                        ShiftType.OVERTIME -> 1.5
-                        ShiftType.WEEKEND -> 1.5
-                    }
-                    val base = hours * rate * multiplier
-
-                    // Доплаты/удержания, привязанные к смене (см. Models.kt: LedgerEntry.surchargeIds)
-                    var shiftTotal = base
-                    entry.surchargeIds.forEach surchargeLoop@{ surchargeId ->
-                        val surcharge = surchargeById[surchargeId] ?: return@surchargeLoop
-                        val weekdayOk = surcharge.activeWeekdays.isEmpty() ||
-                                surcharge.activeWeekdays.contains(entry.date.dayOfWeek.value)
-                        if (!weekdayOk) return@surchargeLoop
-
-                        val contribution = when (surcharge.calcType) {
-                            SurchargeCalcType.FIXED_PER_SHIFT -> surcharge.amount
-                            SurchargeCalcType.PER_HOUR -> surcharge.amount * hours
-                            SurchargeCalcType.PERCENT -> base * (surcharge.amount / 100.0)
-                        }
-                        shiftTotal += if (surcharge.kind == SurchargeKind.BONUS) contribution else -contribution
-                    }
-
-                    accrued += shiftTotal
+                    accrued += shiftTotalAmount(entry, rate, surcharges)
                 }
                 EntryType.PAYMENT -> payments += entry.amount
                 EntryType.TAX -> taxes += entry.amount
@@ -129,5 +98,59 @@ object PayrollCalculator {
             entries = filtered,
             totalHours = totalHours
         )
+    }
+
+    /**
+     * Множитель оплаты за тип смены. Если включена «Оплата сверхурочных часов»
+     * (LedgerEntry.overtimeEnabled, поле из диалога «Смена» по макету), множитель
+     * не может быть ниже 1.5 — это ставка сверхурочных.
+     */
+    fun shiftMultiplier(entry: LedgerEntry): Double {
+        val base = when (entry.shiftType) {
+            ShiftType.DAY -> 1.0
+            ShiftType.NIGHT -> 1.4
+            ShiftType.HOLIDAY -> 2.0
+            ShiftType.OVERTIME -> 1.5
+            ShiftType.WEEKEND -> 1.5
+        }
+        return if (entry.overtimeEnabled) maxOf(base, 1.5) else base
+    }
+
+    /**
+     * Основная оплата за смену (без доплат/удержаний): оплачиваемые часы × ставка × множитель.
+     * Если пользователь вручную ввёл сумму в поле «Основная оплата» в диалоге (entry.amount > 0),
+     * используется она — это ручное переопределение расчёта, как показано на макете
+     * (редактируемое поле рядом с «07ч 00м · 0,00 ₽»).
+     */
+    fun shiftBaseAmount(entry: LedgerEntry, hourlyRate: Double): Double {
+        if (entry.amount > 0.0) return entry.amount
+        return entry.calculatePaidHours() * hourlyRate * shiftMultiplier(entry)
+    }
+
+    /** Сумма всех доплат/удержаний, привязанных к смене (с учётом условия по дням недели). */
+    fun shiftSurchargeAmount(entry: LedgerEntry, surcharges: List<Surcharge>, baseAmount: Double): Double {
+        val surchargeById = surcharges.associateBy { it.id }
+        var total = 0.0
+        val hours = entry.calculatePaidHours()
+        entry.surchargeIds.forEach surchargeLoop@{ surchargeId ->
+            val surcharge = surchargeById[surchargeId] ?: return@surchargeLoop
+            val weekdayOk = surcharge.activeWeekdays.isEmpty() ||
+                    surcharge.activeWeekdays.contains(entry.date.dayOfWeek.value)
+            if (!weekdayOk) return@surchargeLoop
+
+            val contribution = when (surcharge.calcType) {
+                SurchargeCalcType.FIXED_PER_SHIFT -> surcharge.amount
+                SurchargeCalcType.PER_HOUR -> surcharge.amount * hours
+                SurchargeCalcType.PERCENT -> baseAmount * (surcharge.amount / 100.0)
+            }
+            total += if (surcharge.kind == SurchargeKind.BONUS) contribution else -contribution
+        }
+        return total
+    }
+
+    /** Итоговая сумма за смену: основная оплата + доплаты − удержания. */
+    fun shiftTotalAmount(entry: LedgerEntry, hourlyRate: Double, surcharges: List<Surcharge>): Double {
+        val base = shiftBaseAmount(entry, hourlyRate)
+        return base + shiftSurchargeAmount(entry, surcharges, base)
     }
 }

@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.io.File
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 data class BackupFile(
@@ -93,6 +94,17 @@ object BackupManager {
                 put("quantity", it.quantity)
                 // ДОБАВЛЕНО: сохраняем доплаты, привязанные к смене
                 put("surchargeIds", JSONArray(it.surchargeIds))
+                // ИСПРАВЛЕНО: раньше startTime/endTime/shiftType смены вообще не сохранялись —
+                // при восстановлении бекапа время и тип смены терялись.
+                put("startTime", it.startTime?.toString() ?: JSONObject.NULL)
+                put("endTime", it.endTime?.toString() ?: JSONObject.NULL)
+                put("shiftType", it.shiftType.name)
+                // ДОБАВЛЕНО (диалог «Смена» по макету)
+                put("unpaidBreakMinutes", it.unpaidBreakMinutes)
+                put("overtimeEnabled", it.overtimeEnabled)
+                put("projectName", it.projectName)
+                // ДОБАВЛЕНО: сохраняем реальные вложения (URI файлов/фото) записи
+                put("attachments", JSONArray(it.attachments))
             })
         }
         root.put("entries", entries)
@@ -205,6 +217,10 @@ object BackupManager {
                 o.optJSONArray("surchargeIds")?.let { ids ->
                     for (j in 0 until ids.length()) surchargeIds.add(ids.getString(j))
                 }
+                val attachments = mutableListOf<String>()
+                o.optJSONArray("attachments")?.let { atts ->
+                    for (j in 0 until atts.length()) attachments.add(atts.getString(j))
+                }
                 entries.add(
                     LedgerEntry(
                         id = o.getString("id"),
@@ -218,7 +234,14 @@ object BackupManager {
                         expenseCategoryId = if (o.isNull("expenseCategoryId")) null else o.getString("expenseCategoryId"),
                         unitId = if (o.isNull("unitId")) null else o.getString("unitId"),
                         quantity = o.optDouble("quantity", 0.0),
-                        surchargeIds = surchargeIds
+                        surchargeIds = surchargeIds,
+                        startTime = if (o.isNull("startTime")) null else runCatching { LocalTime.parse(o.getString("startTime")) }.getOrNull(),
+                        endTime = if (o.isNull("endTime")) null else runCatching { LocalTime.parse(o.getString("endTime")) }.getOrNull(),
+                        shiftType = runCatching { ShiftType.valueOf(o.optString("shiftType", "DAY")) }.getOrDefault(ShiftType.DAY),
+                        unpaidBreakMinutes = o.optInt("unpaidBreakMinutes", 0),
+                        overtimeEnabled = o.optBoolean("overtimeEnabled", false),
+                        projectName = o.optString("projectName", ""),
+                        attachments = attachments
                     )
                 )
             }

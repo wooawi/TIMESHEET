@@ -1,6 +1,11 @@
 package com.example.timesheet.ui
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,9 +16,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
@@ -28,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,9 +55,30 @@ fun JournalEntryItem(
     onEdit: (LedgerEntry) -> Unit = {},
     onDelete: (String) -> Unit = {},
     onRecalculate: (String) -> Unit = {},
-    onAttachments: (LedgerEntry) -> Unit = {}
+    // ИЗМЕНЕНО (ТЗ «сделать открытие галереи/файлов настоящими»): вместо заглушки
+    // без параметров теперь передаём id записи и итоговый список URI вложений —
+    // сам выбор файла/фото происходит здесь же, через системный выбор документов.
+    onAttachmentsChanged: (String, List<String>) -> Unit = { _, _ -> }
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    val attachmentPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            uris.forEach { uri ->
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+            }
+            val merged = (entry.attachments + uris.map { it.toString() }).distinct()
+            onAttachmentsChanged(entry.id, merged)
+        }
+    }
 
     val dateFormatter = DateTimeFormatter.ofPattern("d MMM yyyy г. EEE")
     val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
@@ -406,36 +435,111 @@ fun JournalEntryItem(
                 if (expanded) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Divider()
+
+                    // ИСПРАВЛЕНО (ТЗ «исправить ошибку того что не влазит текст»):
+                    // раньше это была обычная Row без переноса и без прокрутки — на узких
+                    // экранах последней кнопке не хватало места, и её текст сжимался в
+                    // вертикальный "столбик" из букв. Прокручиваемая Row гарантирует, что
+                    // кнопки никогда не сжимаются меньше своего естественного размера.
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        horizontalArrangement = Arrangement.End
+                            .padding(top = 8.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         TextButton(
-                            onClick = { onAttachments(entry) }
+                            onClick = { attachmentPicker.launch(arrayOf("*/*")) }
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.AttachFile,
                                 contentDescription = "Вложения",
                                 modifier = Modifier.size(16.dp)
                             )
-                            Text("Вложения", fontSize = 12.sp)
+                            Text(
+                                text = if (entry.attachments.isEmpty()) {
+                                    "Вложения"
+                                } else {
+                                    "Вложения (${entry.attachments.size})"
+                                },
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                         TextButton(
                             onClick = { onEdit(entry) }
                         ) {
-                            Text("Редактировать", fontSize = 12.sp, color = Color(0xFF2196F3))
+                            Text(
+                                "Редактировать",
+                                fontSize = 12.sp,
+                                color = Color(0xFF2196F3),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                         TextButton(
                             onClick = { onRecalculate(entry.id) }
                         ) {
-                            Text("Пересчитать", fontSize = 12.sp, color = Color(0xFFFF9800))
+                            Text(
+                                "Пересчитать",
+                                fontSize = 12.sp,
+                                color = Color(0xFFFF9800),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                         TextButton(
                             onClick = { onDelete(entry.id) }
                         ) {
-                            Text("Удалить", fontSize = 12.sp, color = Color.Red)
+                            Text(
+                                "Удалить",
+                                fontSize = 12.sp,
+                                color = Color.Red,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    // ДОБАВЛЕНО: реальный список вложений — каждое открывается через
+                    // системное приложение (галерею/просмотрщик файлов) по его типу.
+                    if (entry.attachments.isNotEmpty()) {
+                        Column(modifier = Modifier.padding(top = 4.dp)) {
+                            entry.attachments.forEach { uriString ->
+                                val uri = remember(uriString) { Uri.parse(uriString) }
+                                val displayName = remember(uriString) {
+                                    uriString.substringAfterLast('/').substringBefore('?')
+                                        .ifBlank { "Файл" }
+                                }
+                                TextButton(
+                                    onClick = {
+                                        runCatching {
+                                            val type =
+                                                context.contentResolver.getType(uri) ?: "*/*"
+                                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                setDataAndType(uri, type)
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            context.startActivity(intent)
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.InsertDriveFile,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = displayName,
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF5CA02F),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
                         }
                     }
                 }

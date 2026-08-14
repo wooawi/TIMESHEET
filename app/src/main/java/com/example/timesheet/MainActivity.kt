@@ -92,6 +92,7 @@ import com.example.timesheet.ui.JournalEntryItem
 import com.example.timesheet.ui.MonthHeaderBar
 import com.example.timesheet.ui.PayslipReportScreen
 import com.example.timesheet.ui.PeriodSettingsScreen
+import com.example.timesheet.ui.ShiftEntryDialog
 import com.example.timesheet.ui.ShiftJournalScreen
 import com.example.timesheet.ui.ShiftTemplateEditScreen
 import com.example.timesheet.ui.ShiftTemplateListScreen
@@ -133,7 +134,9 @@ data class EmployeeDialogState(
 data class AddEntryRequest(
     val title: String,
     val type: EntryType,
-    val showHours: Boolean
+    val showHours: Boolean,
+    // ДОБАВЛЕНО: доплаты/удержания из шаблона смены переносятся в создаваемую запись
+    val surchargeIds: List<String> = emptyList()
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -159,12 +162,29 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
     val expenseCategories by viewModel.expenseCategories.collectAsState()
     val units by viewModel.units.collectAsState()
     val taxes by viewModel.taxes.collectAsState()
+    val reportPeriodStart by viewModel.reportPeriodStart.collectAsState()
+    val reportPeriodEnd by viewModel.reportPeriodEnd.collectAsState()
 
-    val breakdown = remember(entries, employees, currentMonth, selectedEmployeeId, selectedOrganizationId, openingBalance) {
-        PayrollCalculator.calculate(
+    // ИЗМЕНЕНО (ТЗ): сумма в верхней плашке дохода теперь считается за тот же
+    // настроенный период (reportPeriodStart..reportPeriodEnd), что и список смен
+    // на главном экране, а не за отдельный currentMonth — иначе цифра наверху не
+    // соответствовала бы записям, которые реально видны в списке под ней.
+    val breakdown = remember(
+        entries,
+        employees,
+        reportPeriodStart,
+        reportPeriodEnd,
+        selectedEmployeeId,
+        selectedOrganizationId,
+        openingBalance,
+        surcharges
+    ) {
+        PayrollCalculator.calculateForPeriod(
             entries = entries,
             employees = employees,
-            month = currentMonth,
+            surcharges = surcharges,
+            start = reportPeriodStart,
+            end = reportPeriodEnd,
             employeeFilter = selectedEmployeeId,
             organizationFilter = selectedOrganizationId,
             openingBalance = openingBalance
@@ -227,7 +247,8 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                     expandedEmployeeId = if (expandedEmployeeId == id) null else id
                 },
                 onEditClick = { entry ->
-                    employeeDialogState = EmployeeDialogState(entry.id, entry.name, entry.hourlyRate)
+                    employeeDialogState =
+                        EmployeeDialogState(entry.id, entry.name, entry.hourlyRate)
                 },
                 onDeleteClick = { id ->
                     viewModel.deleteEmployee(id)
@@ -291,9 +312,10 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                 onIncomeClick = { showIncomeDialog = true },
                 onEditEntry = { editingEntry = it },
                 onDeleteEntry = { id -> viewModel.deleteEntry(id) },
-                onRecalculateEntry = { id ->
-                    // TODO: логика пересчёта
-                }
+                onRecalculateEntry = { id -> viewModel.recalculateEntry(id) },
+                reportPeriodStart = reportPeriodStart,
+                reportPeriodEnd = reportPeriodEnd,
+                onAttachmentsChanged = { id, uris -> viewModel.addAttachments(id, uris) }
             )
 
             "Отчеты" -> ReportsMenuScreen(
@@ -342,11 +364,13 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                 onBack = { currentScreen = "Журнал расчетов" },
                 onApplyPeriod = { start, end ->
                     viewModel.setReportPeriod(start, end)
-                    currentScreen = "Журнал расчетов"
+                    // ИЗМЕНЕНО (ТЗ, цепочка по троеточию): после применения периода
+                    // открывается «Журнал смен» — как показано на макете.
+                    currentScreen = "Журнал смен"
                 },
                 onApplyQuickPeriod = { periodId ->
                     viewModel.applyQuickReportPeriod(periodId)
-                    currentScreen = "Журнал расчетов"
+                    currentScreen = "Журнал смен"
                 }
             )
 
@@ -355,14 +379,16 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                 employees = employees,
                 organizations = organizations,
                 timeTypes = timeTypes,
-                periodStart = viewModel.reportPeriodStart.value,
-                periodEnd = viewModel.reportPeriodEnd.value,
+                periodStart = reportPeriodStart,
+                periodEnd = reportPeriodEnd,
                 filterOrganizationId = filterOrganizationId,
                 filterEmployeeId = filterEmployeeId,
                 onBack = { currentScreen = "Журнал расчетов" },
                 onFilterClick = { currentScreen = "Фильтр" },
                 onEditEntry = { editingEntry = it },
-                onDeleteEntry = { viewModel.deleteEntry(it) }
+                onDeleteEntry = { viewModel.deleteEntry(it) },
+                onRecalculateEntry = { id -> viewModel.recalculateEntry(id) },
+                onAttachmentsChanged = { id, uris -> viewModel.addAttachments(id, uris) }
             )
 
             "Фильтр" -> FilterMenuScreen(
@@ -432,776 +458,861 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
         }
 
         addEntryRequest?.let { request ->
-            AddEntryDialog(
-                title = request.title,
-                entryType = request.type,
-                showHours = request.showHours,
-                employees = employees,
-                organizations = organizations,
-                expenseCategories = expenseCategories,
-                units = units,
-                preselectedEmployeeId = selectedEmployeeId,
-                preselectedOrganizationId = selectedOrganizationId,
-                onDismiss = { addEntryRequest = null },
-                onConfirm = { entry ->
-                    val duplicate = entries.any {
-                        it.date == entry.date &&
-                                it.type == entry.type &&
-                                it.employeeId == entry.employeeId &&
-                                it.hours == entry.hours &&
-                                it.amount == entry.amount
+            if (request.type == EntryType.SHIFT) {
+                val projectSuggestions =
+                    (shiftTemplates.map { it.projectName } + entries.mapNotNull { it.projectName.ifBlank { null } })
+                        .filter { it.isNotBlank() }
+                ShiftEntryDialog(
+                    employees = employees,
+                    organizations = organizations,
+                    surcharges = surcharges,
+                    preselectedEmployeeId = selectedEmployeeId,
+                    preselectedOrganizationId = selectedOrganizationId,
+                    initialEntry = LedgerEntry(surchargeIds = request.surchargeIds),
+                    projectSuggestions = projectSuggestions,
+                    onClose = { addEntryRequest = null },
+                    onConfirm = { entry ->
+                        val duplicate = entries.any {
+                            it.date == entry.date &&
+                                    it.type == entry.type &&
+                                    it.employeeId == entry.employeeId &&
+                                    it.startTime == entry.startTime &&
+                                    it.endTime == entry.endTime
+                        }
+                        if (!duplicate) {
+                            viewModel.addEntry(entry)
+                        }
+                        addEntryRequest = null
                     }
-                    if (!duplicate) {
-                        viewModel.addEntry(entry)
+                )
+            } else {
+                AddEntryDialog(
+                    title = request.title,
+                    entryType = request.type,
+                    showHours = request.showHours,
+                    employees = employees,
+                    organizations = organizations,
+                    expenseCategories = expenseCategories,
+                    units = units,
+                    preselectedEmployeeId = selectedEmployeeId,
+                    preselectedOrganizationId = selectedOrganizationId,
+                    initialSurchargeIds = request.surchargeIds,
+                    onDismiss = { addEntryRequest = null },
+                    onConfirm = { entry ->
+                        val duplicate = entries.any {
+                            it.date == entry.date &&
+                                    it.type == entry.type &&
+                                    it.employeeId == entry.employeeId &&
+                                    it.hours == entry.hours &&
+                                    it.amount == entry.amount
+                        }
+                        if (!duplicate) {
+                            viewModel.addEntry(entry)
+                        }
+                        addEntryRequest = null
                     }
-                    addEntryRequest = null
-                }
-            )
+                )
+            }
         }
 
         editingEntry?.let { entry ->
-            AddEntryDialog(
-                title = "Редактировать запись",
-                entryType = entry.type,
-                showHours = entry.type == EntryType.SHIFT,
-                employees = employees,
-                organizations = organizations,
-                expenseCategories = expenseCategories,
-                units = units,
-                preselectedEmployeeId = entry.employeeId,
-                preselectedOrganizationId = entry.organizationId,
-                initialNote = entry.note,
-                initialDate = entry.date,
-                initialStartTime = entry.startTime,
-                initialEndTime = entry.endTime,
-                initialShiftType = entry.shiftType,
-                onDismiss = { editingEntry = null },
-                onConfirm = { updated ->
-                    viewModel.updateEntry(updated.copy(id = entry.id))
-                    editingEntry = null
-                }
-            )
-        }
-
-        if (showIncomeDialog) {
-            IncomeBreakdownDialog(
-                monthLabel = formatMonth(currentMonth),
-                breakdown = breakdown,
-                onDismiss = { showIncomeDialog = false },
-                onOpeningBalanceChange = { viewModel.setOpeningBalance(it) }
-            )
-        }
-
-        // ========== ШАБЛОНЫ И ДОПЛАТЫ ==========
-
-        if (showShiftTemplates) {
-            ShiftTemplateListScreen(
-                templates = shiftTemplates,
-                onClose = { showShiftTemplates = false },
-                onAddNew = {
-                    editingShiftTemplate = ShiftTemplate()
-                    showShiftTemplates = false
-                },
-                onApply = { template ->
-                    shiftTemplateToApply = template
-                    showShiftTemplates = false
-                },
-                onEdit = { template ->
-                    editingShiftTemplate = template
-                    showShiftTemplates = false
-                },
-                onDelete = { id ->
-                    viewModel.deleteShiftTemplate(id)
-                }
-            )
-        }
-
-        editingShiftTemplate?.let { template ->
-            ShiftTemplateEditScreen(
-                initial = template,
-                employees = employees,
-                organizations = organizations,
-                allSurcharges = surcharges,
-                onClose = { editingShiftTemplate = null },
-                onSave = { updated ->
-                    viewModel.addOrUpdateShiftTemplate(updated)
-                    editingShiftTemplate = null
-                },
-                onDelete = if (template.id.isNotBlank() && !template.id.startsWith("builtin")) { id ->
-                    viewModel.deleteShiftTemplate(id)
-                    editingShiftTemplate = null
-                } else null,
-                onOpenSurchargeLibrary = { draft ->
-                    showSurchargeLibrary = true
-                    editingShiftTemplate = draft
-                }
-            )
-        }
-
-        if (showSurchargeLibrary) {
-            val currentTemplate = editingShiftTemplate ?: ShiftTemplate()
-            SurchargeListScreen(
-                surcharges = surcharges,
-                selectedIds = currentTemplate.surchargeIds.toSet(),
-                onToggle = { surchargeId ->
-                    val newIds = if (surchargeId in currentTemplate.surchargeIds) {
-                        currentTemplate.surchargeIds - surchargeId
-                    } else {
-                        currentTemplate.surchargeIds + surchargeId
+            if (entry.type == EntryType.SHIFT) {
+                val projectSuggestions =
+                    (shiftTemplates.map { it.projectName } + entries.mapNotNull { it.projectName.ifBlank { null } })
+                        .filter { it.isNotBlank() }
+                ShiftEntryDialog(
+                    employees = employees,
+                    organizations = organizations,
+                    surcharges = surcharges,
+                    preselectedEmployeeId = entry.employeeId,
+                    preselectedOrganizationId = entry.organizationId,
+                    initialEntry = entry,
+                    projectSuggestions = projectSuggestions,
+                    onClose = { editingEntry = null },
+                    onConfirm = { updated ->
+                        viewModel.updateEntry(updated.copy(id = entry.id))
+                        editingEntry = null
+                    },
+                    onDelete = { id ->
+                        viewModel.deleteEntry(id)
+                        editingEntry = null
                     }
-                    editingShiftTemplate = currentTemplate.copy(surchargeIds = newIds)
-                },
-                onAddNew = {
-                    showSurchargeLibrary = false
-                    editingSurcharge = Surcharge()
-                },
-                onEditExisting = { surcharge ->
-                    editingSurcharge = surcharge
-                    showSurchargeLibrary = false
-                },
-                onClose = { showSurchargeLibrary = false }
-            )
-        }
+                )
+            } else {
+                AddEntryDialog(
+                    title = "Редактировать запись",
+                    entryType = entry.type,
+                    showHours = false,
+                    employees = employees,
+                    organizations = organizations,
+                    expenseCategories = expenseCategories,
+                    units = units,
+                    preselectedEmployeeId = entry.employeeId,
+                    preselectedOrganizationId = entry.organizationId,
+                    initialNote = entry.note,
+                    initialDate = entry.date,
+                    initialStartTime = entry.startTime,
+                    initialEndTime = entry.endTime,
+                    initialShiftType = entry.shiftType,
+                    initialSurchargeIds = entry.surchargeIds,
+                    onDismiss = { editingEntry = null },
+                    onConfirm = { updated ->
+                        viewModel.updateEntry(updated.copy(id = entry.id))
+                        editingEntry = null
+                    }
+                )
+            }
 
-        editingSurcharge?.let { surcharge ->
-            SurchargeEditScreen(
-                initial = surcharge,
-                onClose = { editingSurcharge = null },
-                onSave = { updated ->
-                    viewModel.addOrUpdateSurcharge(updated)
-                    editingSurcharge = null
-                },
-                onDelete = if (!surcharge.isBuiltIn) { id ->
-                    viewModel.deleteSurcharge(id)
-                    editingSurcharge = null
-                } else null
-            )
-        }
+            if (showIncomeDialog) {
+                IncomeBreakdownDialog(
+                    monthLabel = formatMonth(currentMonth),
+                    breakdown = breakdown,
+                    onDismiss = { showIncomeDialog = false },
+                    onOpeningBalanceChange = { viewModel.setOpeningBalance(it) }
+                )
+            }
 
-        shiftTemplateToApply?.let { template ->
-            addEntryRequest = AddEntryRequest(
-                title = "Смена по шаблону: ${template.name}",
-                type = EntryType.SHIFT,
-                showHours = true
-            )
-            shiftTemplateToApply = null
-        }
+            // ========== ШАБЛОНЫ И ДОПЛАТЫ ==========
 
-        // ========== ДИАЛОГИ ДЛЯ СПРАВОЧНИКОВ ==========
+            if (showShiftTemplates) {
+                ShiftTemplateListScreen(
+                    templates = shiftTemplates,
+                    onClose = { showShiftTemplates = false },
+                    onAddNew = {
+                        editingShiftTemplate = ShiftTemplate()
+                        showShiftTemplates = false
+                    },
+                    onApply = { template ->
+                        shiftTemplateToApply = template
+                        showShiftTemplates = false
+                    },
+                    onEdit = { template ->
+                        editingShiftTemplate = template
+                        showShiftTemplates = false
+                    },
+                    onDelete = { id ->
+                        viewModel.deleteShiftTemplate(id)
+                    }
+                )
+            }
 
-        editingTimeType?.let { type ->
-            TimeTypeEditDialog(
-                initial = type,
-                onDismiss = { editingTimeType = null },
-                onSave = { updated ->
-                    viewModel.addOrUpdateTimeType(updated)
-                    editingTimeType = null
-                }
-            )
-        }
+            editingShiftTemplate?.let { template ->
+                ShiftTemplateEditScreen(
+                    initial = template,
+                    employees = employees,
+                    organizations = organizations,
+                    allSurcharges = surcharges,
+                    onClose = { editingShiftTemplate = null },
+                    onSave = { updated ->
+                        viewModel.addOrUpdateShiftTemplate(updated)
+                        editingShiftTemplate = null
+                    },
+                    onDelete = if (template.id.isNotBlank() && !template.id.startsWith("builtin")) { id ->
+                        viewModel.deleteShiftTemplate(id)
+                        editingShiftTemplate = null
+                    } else null,
+                    onOpenSurchargeLibrary = { draft ->
+                        showSurchargeLibrary = true
+                        editingShiftTemplate = draft
+                    }
+                )
+            }
 
-        editingExpenseCategory?.let { category ->
-            ExpenseCategoryEditDialog(
-                initial = category,
-                onDismiss = { editingExpenseCategory = null },
-                onSave = { updated ->
-                    viewModel.addOrUpdateExpenseCategory(updated)
-                    editingExpenseCategory = null
-                }
-            )
-        }
+            if (showSurchargeLibrary) {
+                val currentTemplate = editingShiftTemplate ?: ShiftTemplate()
+                SurchargeListScreen(
+                    surcharges = surcharges,
+                    selectedIds = currentTemplate.surchargeIds.toSet(),
+                    onToggle = { surchargeId ->
+                        val newIds = if (surchargeId in currentTemplate.surchargeIds) {
+                            currentTemplate.surchargeIds - surchargeId
+                        } else {
+                            currentTemplate.surchargeIds + surchargeId
+                        }
+                        editingShiftTemplate = currentTemplate.copy(surchargeIds = newIds)
+                    },
+                    onAddNew = {
+                        showSurchargeLibrary = false
+                        editingSurcharge = Surcharge()
+                    },
+                    onEditExisting = { surcharge ->
+                        editingSurcharge = surcharge
+                        showSurchargeLibrary = false
+                    },
+                    onClose = { showSurchargeLibrary = false }
+                )
+            }
 
-        editingTax?.let { tax ->
-            TaxEditDialog(
-                initial = tax,
-                onDismiss = { editingTax = null },
-                onSave = { updated ->
-                    viewModel.addOrUpdateTax(updated)
-                    editingTax = null
-                }
-            )
+            editingSurcharge?.let { surcharge ->
+                SurchargeEditScreen(
+                    initial = surcharge,
+                    onClose = { editingSurcharge = null },
+                    onSave = { updated ->
+                        viewModel.addOrUpdateSurcharge(updated)
+                        editingSurcharge = null
+                    },
+                    onDelete = if (!surcharge.isBuiltIn) { id ->
+                        viewModel.deleteSurcharge(id)
+                        editingSurcharge = null
+                    } else null
+                )
+            }
+
+            shiftTemplateToApply?.let { template ->
+                addEntryRequest = AddEntryRequest(
+                    title = "Смена по шаблону: ${template.name}",
+                    type = EntryType.SHIFT,
+                    showHours = true,
+                    surchargeIds = template.surchargeIds
+                )
+                shiftTemplateToApply = null
+            }
+
+            // ========== ДИАЛОГИ ДЛЯ СПРАВОЧНИКОВ ==========
+
+            editingTimeType?.let { type ->
+                TimeTypeEditDialog(
+                    initial = type,
+                    onDismiss = { editingTimeType = null },
+                    onSave = { updated ->
+                        viewModel.addOrUpdateTimeType(updated)
+                        editingTimeType = null
+                    }
+                )
+            }
+
+            editingExpenseCategory?.let { category ->
+                ExpenseCategoryEditDialog(
+                    initial = category,
+                    onDismiss = { editingExpenseCategory = null },
+                    onSave = { updated ->
+                        viewModel.addOrUpdateExpenseCategory(updated)
+                        editingExpenseCategory = null
+                    }
+                )
+            }
+
+            editingTax?.let { tax ->
+                TaxEditDialog(
+                    initial = tax,
+                    onDismiss = { editingTax = null },
+                    onSave = { updated ->
+                        viewModel.addOrUpdateTax(updated)
+                        editingTax = null
+                    }
+                )
+            }
         }
     }
-}
 
 // ========== ОСТАЛЬНЫЕ ФУНКЦИИ ==========
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun MainScreen(
-    onMenuClick: () -> Unit,
-    employees: List<Employee>,
-    organizations: List<Organization>,
-    entries: List<LedgerEntry>,
-    timeTypes: List<TimeType>,
-    currentMonth: java.time.YearMonth,
-    selectedEmployeeId: String?,
-    selectedOrganizationId: String?,
-    accrued: Double,
-    organizationsMenuExpanded: Boolean,
-    onOrganizationsClick: () -> Unit,
-    onOrganizationsMenuDismiss: () -> Unit,
-    onOrganizationSelect: (String?) -> Unit,
-    personMenuExpanded: Boolean,
-    onPersonClick: () -> Unit,
-    onPersonMenuDismiss: () -> Unit,
-    onEmployeeSelect: (String?) -> Unit,
-    shiftsMenuExpanded: Boolean,
-    onShiftsClick: () -> Unit,
-    onShiftsMenuDismiss: () -> Unit,
-    onOpenPeriodSettings: () -> Unit,
-    onOpenShiftJournal: () -> Unit,
-    onOpenShiftTemplates: () -> Unit,
-    addMenuExpanded: Boolean,
-    onAddClick: () -> Unit,
-    onAddMenuDismiss: () -> Unit,
-    onAddEntryRequest: (AddEntryRequest) -> Unit,
-    onPreviousMonth: () -> Unit,
-    onNextMonth: () -> Unit,
-    onPickMonth: (YearMonth) -> Unit,
-    onIncomeClick: () -> Unit,
-    onEditEntry: (LedgerEntry) -> Unit,
-    onDeleteEntry: (String) -> Unit,
-    onRecalculateEntry: (String) -> Unit
-) {
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        topBar = {
-            Column {
-                AppTopBar(
-                    onMenuClick = onMenuClick,
-                    onOrganizationsClick = onOrganizationsClick,
-                    organizationsMenuExpanded = organizationsMenuExpanded,
-                    onOrganizationsMenuDismiss = onOrganizationsMenuDismiss,
-                    organizations = organizations,
-                    selectedOrganizationId = selectedOrganizationId,
-                    onOrganizationSelect = onOrganizationSelect,
-                    onPersonClick = onPersonClick,
-                    personMenuExpanded = personMenuExpanded,
-                    onPersonMenuDismiss = onPersonMenuDismiss,
-                    employees = employees,
-                    selectedEmployeeId = selectedEmployeeId,
-                    onEmployeeSelect = onEmployeeSelect,
-                    onShiftsClick = onShiftsClick,
-                    shiftsMenuExpanded = shiftsMenuExpanded,
-                    onShiftsMenuDismiss = onShiftsMenuDismiss,
-                    onOpenPeriodSettings = onOpenPeriodSettings,
-                    onOpenShiftJournal = onOpenShiftJournal,
-                    onOpenTemplates = onOpenShiftTemplates
-                )
-                MonthHeaderBar(
-                    month = currentMonth,
-                    onPrevious = onPreviousMonth,
-                    onNext = onNextMonth,
-                    onPick = onPickMonth
-                )
-                IncomeBar(accrued = accrued, onClick = onIncomeClick)
-            }
-        },
-        floatingActionButton = {
-            AddFab(onClick = onAddClick)
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            if (employees.isEmpty() && organizations.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        "Добавьте сотрудников и организации через меню \u2261,\nчтобы начать вести журнал.",
-                        modifier = Modifier.padding(24.dp)
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun MainScreen(
+        onMenuClick: () -> Unit,
+        employees: List<Employee>,
+        organizations: List<Organization>,
+        entries: List<LedgerEntry>,
+        timeTypes: List<TimeType>,
+        currentMonth: java.time.YearMonth,
+        selectedEmployeeId: String?,
+        selectedOrganizationId: String?,
+        accrued: Double,
+        organizationsMenuExpanded: Boolean,
+        onOrganizationsClick: () -> Unit,
+        onOrganizationsMenuDismiss: () -> Unit,
+        onOrganizationSelect: (String?) -> Unit,
+        personMenuExpanded: Boolean,
+        onPersonClick: () -> Unit,
+        onPersonMenuDismiss: () -> Unit,
+        onEmployeeSelect: (String?) -> Unit,
+        shiftsMenuExpanded: Boolean,
+        onShiftsClick: () -> Unit,
+        onShiftsMenuDismiss: () -> Unit,
+        onOpenPeriodSettings: () -> Unit,
+        onOpenShiftJournal: () -> Unit,
+        onOpenShiftTemplates: () -> Unit,
+        addMenuExpanded: Boolean,
+        onAddClick: () -> Unit,
+        onAddMenuDismiss: () -> Unit,
+        onAddEntryRequest: (AddEntryRequest) -> Unit,
+        onPreviousMonth: () -> Unit,
+        onNextMonth: () -> Unit,
+        onPickMonth: (YearMonth) -> Unit,
+        onIncomeClick: () -> Unit,
+        onEditEntry: (LedgerEntry) -> Unit,
+        onDeleteEntry: (String) -> Unit,
+        onRecalculateEntry: (String) -> Unit,
+        // ДОБАВЛЕНО (ТЗ: «кнопка выбора периода должна реально влиять на отображение
+        // смен на главной странице») — период, настроенный в «Настроить период».
+        reportPeriodStart: java.time.LocalDate,
+        reportPeriodEnd: java.time.LocalDate,
+        onAttachmentsChanged: (String, List<String>) -> Unit = { _, _ -> }
+    ) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            topBar = {
+                Column {
+                    AppTopBar(
+                        onMenuClick = onMenuClick,
+                        onOrganizationsClick = onOrganizationsClick,
+                        organizationsMenuExpanded = organizationsMenuExpanded,
+                        onOrganizationsMenuDismiss = onOrganizationsMenuDismiss,
+                        organizations = organizations,
+                        selectedOrganizationId = selectedOrganizationId,
+                        onOrganizationSelect = onOrganizationSelect,
+                        onPersonClick = onPersonClick,
+                        personMenuExpanded = personMenuExpanded,
+                        onPersonMenuDismiss = onPersonMenuDismiss,
+                        employees = employees,
+                        selectedEmployeeId = selectedEmployeeId,
+                        onEmployeeSelect = onEmployeeSelect,
+                        onShiftsClick = onShiftsClick,
+                        shiftsMenuExpanded = shiftsMenuExpanded,
+                        onShiftsMenuDismiss = onShiftsMenuDismiss,
+                        onOpenPeriodSettings = onOpenPeriodSettings,
+                        onOpenShiftJournal = onOpenShiftJournal,
+                        onOpenTemplates = onOpenShiftTemplates
                     )
+                    MonthHeaderBar(
+                        month = currentMonth,
+                        onPrevious = onPreviousMonth,
+                        onNext = onNextMonth,
+                        onPick = onPickMonth
+                    )
+                    IncomeBar(accrued = accrued, onClick = onIncomeClick)
                 }
-            } else {
-                val filteredEntries = entries.filter { entry ->
-                    val inMonth = entry.date.year == currentMonth.year &&
-                            entry.date.month == currentMonth.month
-                    val employeeOk = selectedEmployeeId == null || entry.employeeId == selectedEmployeeId
-                    val orgOk = selectedOrganizationId == null || entry.organizationId == selectedOrganizationId
-                    inMonth && employeeOk && orgOk
-                }
-
-                if (filteredEntries.isEmpty()) {
+            },
+            floatingActionButton = {
+                AddFab(onClick = onAddClick)
+            }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                if (employees.isEmpty() && organizations.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
-                            "Нет записей за выбранный период",
+                            "Добавьте сотрудников и организации через меню \u2261,\nчтобы начать вести журнал.",
                             modifier = Modifier.padding(24.dp)
                         )
                     }
                 } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp)
-                    ) {
-                        items(filteredEntries.sortedByDescending { it.date }, key = { it.id }) { entry ->
-                            JournalEntryItem(
-                                entry = entry,
-                                employeeName = employees.find { it.id == entry.employeeId }?.name,
-                                organizationName = organizations.find { it.id == entry.organizationId }?.name,
-                                timeTypes = timeTypes,
-                                onEdit = { onEditEntry(it) },
-                                onDelete = { onDeleteEntry(it) },
-                                onRecalculate = { onRecalculateEntry(it) },
-                                onAttachments = { /* TODO: открыть диалог выбора файла/фото */ }
+                    // ИСПРАВЛЕНО (ТЗ): раньше здесь фильтровали только по currentMonth
+                    // (месяц, который листают стрелками), а период, настроенный на экране
+                    // «Настроить период» (⋮ → Настроить период), никак не влиял на список —
+                    // тот же период уже корректно применяется в «Журнале смен», теперь
+                    // применяется и здесь, тем же способом (запись входит в диапазон
+                    // reportPeriodStart..reportPeriodEnd).
+                    val filteredEntries = entries.filter { entry ->
+                        val inPeriod = !entry.date.isBefore(reportPeriodStart) &&
+                                !entry.date.isAfter(reportPeriodEnd)
+                        val employeeOk =
+                            selectedEmployeeId == null || entry.employeeId == selectedEmployeeId
+                        val orgOk =
+                            selectedOrganizationId == null || entry.organizationId == selectedOrganizationId
+                        inPeriod && employeeOk && orgOk
+                    }
+
+                    if (filteredEntries.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "Нет записей за выбранный период",
+                                modifier = Modifier.padding(24.dp)
                             )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(16.dp)
+                        ) {
+                            items(
+                                filteredEntries.sortedByDescending { it.date },
+                                key = { it.id }) { entry ->
+                                JournalEntryItem(
+                                    entry = entry,
+                                    employeeName = employees.find { it.id == entry.employeeId }?.name,
+                                    organizationName = organizations.find { it.id == entry.organizationId }?.name,
+                                    timeTypes = timeTypes,
+                                    onEdit = { onEditEntry(it) },
+                                    onDelete = { onDeleteEntry(it) },
+                                    onRecalculate = { onRecalculateEntry(it) },
+                                    onAttachmentsChanged = onAttachmentsChanged
+                                )
+                            }
                         }
                     }
                 }
-            }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(end = 16.dp, bottom = 80.dp),
-                contentAlignment = Alignment.BottomEnd
-            ) {
-                AddMenu(
-                    expanded = addMenuExpanded,
-                    onDismiss = onAddMenuDismiss,
-                    onSelect = onAddEntryRequest
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(end = 16.dp, bottom = 80.dp),
+                    contentAlignment = Alignment.BottomEnd
+                ) {
+                    AddMenu(
+                        expanded = addMenuExpanded,
+                        onDismiss = onAddMenuDismiss,
+                        onSelect = onAddEntryRequest
+                    )
+                }
             }
         }
     }
-}
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun <T> EntityListScreen(
-    onMenuClick: () -> Unit,
-    title: String,
-    icon: ImageVector,
-    entries: List<T>,
-    idOf: (T) -> String,
-    nameOf: (T) -> String,
-    expandedEntryId: String?,
-    onEntryClick: (String) -> Unit,
-    onEditClick: (T) -> Unit,
-    onDeleteClick: (String) -> Unit,
-    onAddClick: () -> Unit
-) {
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = { Text(title, color = Color.White) },
-                navigationIcon = {
-                    IconButton(onClick = onMenuClick) {
-                        Icon(
-                            imageVector = Icons.Filled.Menu,
-                            contentDescription = "Меню",
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = onAddClick) {
-                        Icon(
-                            imageVector = Icons.Filled.Add,
-                            contentDescription = "Добавить",
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF5CA02F),
-                    navigationIconContentColor = Color.White,
-                    actionIconContentColor = Color.White
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun <T> EntityListScreen(
+        onMenuClick: () -> Unit,
+        title: String,
+        icon: ImageVector,
+        entries: List<T>,
+        idOf: (T) -> String,
+        nameOf: (T) -> String,
+        expandedEntryId: String?,
+        onEntryClick: (String) -> Unit,
+        onEditClick: (T) -> Unit,
+        onDeleteClick: (String) -> Unit,
+        onAddClick: () -> Unit
+    ) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            topBar = {
+                TopAppBar(
+                    title = { Text(title, color = Color.White) },
+                    navigationIcon = {
+                        IconButton(onClick = onMenuClick) {
+                            Icon(
+                                imageVector = Icons.Filled.Menu,
+                                contentDescription = "Меню",
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = onAddClick) {
+                            Icon(
+                                imageVector = Icons.Filled.Add,
+                                contentDescription = "Добавить",
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color(0xFF5CA02F),
+                        navigationIconContentColor = Color.White,
+                        actionIconContentColor = Color.White
+                    )
                 )
-            )
-        }
-    ) { innerPadding ->
-        if (entries.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("Список пуст. Нажмите \"+\", чтобы добавить.")
             }
-        } else {
+        ) { innerPadding ->
+            if (entries.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Список пуст. Нажмите \"+\", чтобы добавить.")
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .padding(16.dp)
+                ) {
+                    items(entries, key = { idOf(it) }) { entry ->
+                        EntityListItem(
+                            name = nameOf(entry),
+                            icon = icon,
+                            expanded = expandedEntryId == idOf(entry),
+                            onClick = { onEntryClick(idOf(entry)) },
+                            onEditClick = { onEditClick(entry) },
+                            onDeleteClick = { onDeleteClick(idOf(entry)) }
+                        )
+                        Spacer(modifier = Modifier.size(8.dp))
+                    }
+                }
+            }
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun ReportsMenuScreen(
+        onMenuClick: () -> Unit,
+        onNavigate: (String) -> Unit
+    ) {
+        val reportItems = listOf(
+            Triple("Отчеты/Расчетный лист", "Расчетный лист", Icons.Filled.Assignment),
+            Triple(
+                "Отчеты/Рабочее время по проектам",
+                "Рабочее время по периодам",
+                Icons.Filled.AccessTime
+            ),
+            Triple("Отчеты/Расходы", "Расходы", Icons.Filled.AttachMoney)
+        )
+
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            topBar = {
+                TopAppBar(
+                    title = { Text("Отчеты", color = Color.White) },
+                    navigationIcon = {
+                        IconButton(onClick = onMenuClick) {
+                            Icon(
+                                imageVector = Icons.Filled.Menu,
+                                contentDescription = "Меню",
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color(0xFF5CA02F),
+                        navigationIconContentColor = Color.White,
+                        actionIconContentColor = Color.White
+                    )
+                )
+            }
+        ) { innerPadding ->
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
                     .padding(16.dp)
             ) {
-                items(entries, key = { idOf(it) }) { entry ->
-                    EntityListItem(
-                        name = nameOf(entry),
-                        icon = icon,
-                        expanded = expandedEntryId == idOf(entry),
-                        onClick = { onEntryClick(idOf(entry)) },
-                        onEditClick = { onEditClick(entry) },
-                        onDeleteClick = { onDeleteClick(idOf(entry)) }
-                    )
+                items(reportItems, key = { it.first }) { (key, title, icon) ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onNavigate(key) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = null,
+                                modifier = Modifier.size(28.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(text = title, fontSize = 18.sp)
+                        }
+                    }
                     Spacer(modifier = Modifier.size(8.dp))
                 }
             }
         }
     }
-}
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ReportsMenuScreen(
-    onMenuClick: () -> Unit,
-    onNavigate: (String) -> Unit
-) {
-    val reportItems = listOf(
-        Triple("Отчеты/Расчетный лист", "Расчетный лист", Icons.Filled.Assignment),
-        Triple("Отчеты/Рабочее время по проектам", "Рабочее время по проектам", Icons.Filled.AccessTime),
-        Triple("Отчеты/Расходы", "Расходы", Icons.Filled.AttachMoney)
-    )
-
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = { Text("Отчеты", color = Color.White) },
-                navigationIcon = {
-                    IconButton(onClick = onMenuClick) {
-                        Icon(
-                            imageVector = Icons.Filled.Menu,
-                            contentDescription = "Меню",
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF5CA02F),
-                    navigationIconContentColor = Color.White,
-                    actionIconContentColor = Color.White
-                )
-            )
-        }
-    ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(16.dp)
-        ) {
-            items(reportItems, key = { it.first }) { (key, title, icon) ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onNavigate(key) }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(28.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(text = title, fontSize = 18.sp)
-                    }
-                }
-                Spacer(modifier = Modifier.size(8.dp))
-            }
-        }
-    }
-}
-
-@Composable
-fun EntityListItem(
-    name: String,
-    icon: ImageVector,
-    expanded: Boolean,
-    onClick: () -> Unit,
-    onEditClick: () -> Unit,
-    onDeleteClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
+    @Composable
+    fun EntityListItem(
+        name: String,
+        icon: ImageVector,
+        expanded: Boolean,
+        onClick: () -> Unit,
+        onEditClick: () -> Unit,
+        onDeleteClick: () -> Unit
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    modifier = Modifier.size(28.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    text = name,
-                    fontSize = 18.sp,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            if (expanded) {
-                Spacer(modifier = Modifier.size(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    IconButton(onClick = onEditClick) {
-                        Icon(imageVector = Icons.Filled.Edit, contentDescription = "Редактировать")
-                    }
-                    IconButton(onClick = onDeleteClick) {
-                        Icon(imageVector = Icons.Filled.Delete, contentDescription = "Удалить")
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = name,
+                        fontSize = 18.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (expanded) {
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        IconButton(onClick = onEditClick) {
+                            Icon(
+                                imageVector = Icons.Filled.Edit,
+                                contentDescription = "Редактировать"
+                            )
+                        }
+                        IconButton(onClick = onDeleteClick) {
+                            Icon(imageVector = Icons.Filled.Delete, contentDescription = "Удалить")
+                        }
                     }
                 }
             }
         }
     }
-}
 
-@Composable
-fun EntityEditDialog(
-    title: String,
-    initialName: String,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit
-) {
-    var name by remember(initialName) { mutableStateOf(initialName) }
+    @Composable
+    fun EntityEditDialog(
+        title: String,
+        initialName: String,
+        onDismiss: () -> Unit,
+        onConfirm: (String) -> Unit
+    ) {
+        var name by remember(initialName) { mutableStateOf(initialName) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
-                label = { Text("Имя") },
-                singleLine = true
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name) }) {
-                Text("Сохранить")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Отмена")
-            }
-        }
-    )
-}
-
-@Composable
-fun EmployeeEditDialog(
-    title: String,
-    initialName: String,
-    initialRate: Double,
-    onDismiss: () -> Unit,
-    onConfirm: (String, Double) -> Unit
-) {
-    var name by remember(initialName) { mutableStateOf(initialName) }
-    var rateText by remember(initialRate) { mutableStateOf(if (initialRate == 0.0) "" else initialRate.toString()) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text(title) },
+            text = {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
                     label = { Text("Имя") },
-                    singleLine = true,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-                OutlinedTextField(
-                    value = rateText,
-                    onValueChange = { rateText = it },
-                    label = { Text("Ставка в час, ₽ (необязательно)") },
                     singleLine = true
                 )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                if (name.isNotBlank()) {
-                    val rate = rateText.replace(',', '.').toDoubleOrNull() ?: 0.0
-                    onConfirm(name, rate)
+            },
+            confirmButton = {
+                TextButton(onClick = { if (name.isNotBlank()) onConfirm(name) }) {
+                    Text("Сохранить")
                 }
-            }) {
-                Text("Сохранить")
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) {
+                    Text("Отмена")
+                }
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Отмена")
-            }
-        }
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PlaceholderScreen(
-    title: String,
-    onMenuClick: () -> Unit
-) {
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = { Text(title, color = Color.White) },
-                navigationIcon = {
-                    IconButton(onClick = onMenuClick) {
-                        Icon(
-                            imageVector = Icons.Filled.Menu,
-                            contentDescription = "Меню",
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF5CA02F),
-                    navigationIconContentColor = Color.White,
-                    actionIconContentColor = Color.White
-                )
-            )
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            // TODO: содержимое раздела
-        }
+        )
     }
-}
 
-@Composable
-fun AppDrawerContent(
-    currentScreen: String,
-    onNavigate: (String) -> Unit
-) {
-    var referencesExpanded by remember { mutableStateOf(false) }
-
-    ModalDrawerSheet(
-        drawerContainerColor = Color(0xFF5CA02F),
-        modifier = Modifier.width(280.dp)
+    @Composable
+    fun EmployeeEditDialog(
+        title: String,
+        initialName: String,
+        initialRate: Double,
+        onDismiss: () -> Unit,
+        onConfirm: (String, Double) -> Unit
     ) {
-        Spacer(modifier = Modifier.size(16.dp))
+        var name by remember(initialName) { mutableStateOf(initialName) }
+        var rateText by remember(initialRate) { mutableStateOf(if (initialRate == 0.0) "" else initialRate.toString()) }
 
-        DrawerRow(
-            title = "Журнал расчетов",
-            icon = Icons.Filled.CalendarMonth,
-            selected = currentScreen == "Журнал расчетов",
-            onClick = { onNavigate("Журнал расчетов") }
-        )
-        DrawerRow(
-            title = "Трекер",
-            icon = Icons.Filled.AccessTime,
-            selected = currentScreen == "Трекер",
-            onClick = { onNavigate("Трекер") }
-        )
-        DrawerRow(
-            title = "Организация",
-            icon = Icons.Filled.ShoppingBag,
-            selected = currentScreen == "Организация",
-            onClick = { onNavigate("Организация") }
-        )
-        DrawerRow(
-            title = "Отчеты",
-            icon = Icons.Filled.Poll,
-            selected = currentScreen == "Отчеты" || currentScreen.startsWith("Отчеты/"),
-            onClick = { onNavigate("Отчеты") }
-        )
-
-        DrawerRow(
-            title = "Справочники",
-            icon = Icons.Filled.MenuBook,
-            selected = currentScreen.startsWith("Справочники/"),
-            onClick = { referencesExpanded = !referencesExpanded },
-            trailingIcon = if (referencesExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore
-        )
-        if (referencesExpanded) {
-            DrawerRow(
-                title = "Типы времени",
-                icon = Icons.Filled.AccessTime,
-                selected = currentScreen == "Справочники/Типы времени",
-                onClick = { onNavigate("Справочники/Типы времени") },
-                indent = true
-            )
-            DrawerRow(
-                title = "Категории расходов",
-                icon = Icons.Filled.AttachMoney,
-                selected = currentScreen == "Справочники/Категории расходов",
-                onClick = { onNavigate("Справочники/Категории расходов") },
-                indent = true
-            )
-            DrawerRow(
-                title = "Единицы измерения",
-                icon = Icons.Filled.Straighten,
-                selected = currentScreen == "Справочники/Единицы измерения",
-                onClick = { onNavigate("Справочники/Единицы измерения") },
-                indent = true
-            )
-            DrawerRow(
-                title = "Налоги",
-                icon = Icons.Filled.MoneyOff,
-                selected = currentScreen == "Справочники/Налоги",
-                onClick = { onNavigate("Справочники/Налоги") },
-                indent = true
-            )
-        }
-
-        DrawerRow(
-            title = "Бекапы",
-            icon = Icons.Filled.CloudDownload,
-            selected = currentScreen == "Бекапы",
-            onClick = { onNavigate("Бекапы") }
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text(title) },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Имя") },
+                        singleLine = true,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    OutlinedTextField(
+                        value = rateText,
+                        onValueChange = { rateText = it },
+                        label = { Text("Ставка в час, ₽ (необязательно)") },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (name.isNotBlank()) {
+                        val rate = rateText.replace(',', '.').toDoubleOrNull() ?: 0.0
+                        onConfirm(name, rate)
+                    }
+                }) {
+                    Text("Сохранить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) {
+                    Text("Отмена")
+                }
+            }
         )
     }
-}
 
-@Composable
-fun DrawerRow(
-    title: String,
-    icon: ImageVector,
-    selected: Boolean,
-    onClick: () -> Unit,
-    indent: Boolean = false,
-    trailingIcon: ImageVector? = null
-) {
-    NavigationDrawerItem(
-        icon = {
-            Icon(
-                imageVector = icon,
-                contentDescription = title,
-                modifier = Modifier.size(if (indent) 24.dp else 32.dp),
-                tint = Color.White
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun PlaceholderScreen(
+        title: String,
+        onMenuClick: () -> Unit
+    ) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            topBar = {
+                TopAppBar(
+                    title = { Text(title, color = Color.White) },
+                    navigationIcon = {
+                        IconButton(onClick = onMenuClick) {
+                            Icon(
+                                imageVector = Icons.Filled.Menu,
+                                contentDescription = "Меню",
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color(0xFF5CA02F),
+                        navigationIconContentColor = Color.White,
+                        actionIconContentColor = Color.White
+                    )
+                )
+            }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                // TODO: содержимое раздела
+            }
+        }
+    }
+
+    @Composable
+    fun AppDrawerContent(
+        currentScreen: String,
+        onNavigate: (String) -> Unit
+    ) {
+        var referencesExpanded by remember { mutableStateOf(false) }
+
+        ModalDrawerSheet(
+            drawerContainerColor = Color(0xFF5CA02F),
+            modifier = Modifier.width(280.dp)
+        ) {
+            Spacer(modifier = Modifier.size(16.dp))
+
+            DrawerRow(
+                title = "Журнал расчетов",
+                icon = Icons.Filled.CalendarMonth,
+                selected = currentScreen == "Журнал расчетов",
+                onClick = { onNavigate("Журнал расчетов") }
             )
-        },
-        label = {
-            Text(
-                text = title,
-                fontSize = if (indent) 18.sp else 24.sp,
-                color = Color.White
+            DrawerRow(
+                title = "Трекер",
+                icon = Icons.Filled.AccessTime,
+                selected = currentScreen == "Трекер",
+                onClick = { onNavigate("Трекер") }
             )
-        },
-        badge = trailingIcon?.let {
-            {
+            DrawerRow(
+                title = "Организация",
+                icon = Icons.Filled.ShoppingBag,
+                selected = currentScreen == "Организация",
+                onClick = { onNavigate("Организация") }
+            )
+            DrawerRow(
+                title = "Отчеты",
+                icon = Icons.Filled.Poll,
+                selected = currentScreen == "Отчеты" || currentScreen.startsWith("Отчеты/"),
+                onClick = { onNavigate("Отчеты") }
+            )
+
+            DrawerRow(
+                title = "Справочники",
+                icon = Icons.Filled.MenuBook,
+                selected = currentScreen.startsWith("Справочники/"),
+                onClick = { referencesExpanded = !referencesExpanded },
+                trailingIcon = if (referencesExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore
+            )
+            if (referencesExpanded) {
+                DrawerRow(
+                    title = "Типы времени",
+                    icon = Icons.Filled.AccessTime,
+                    selected = currentScreen == "Справочники/Типы времени",
+                    onClick = { onNavigate("Справочники/Типы времени") },
+                    indent = true
+                )
+                DrawerRow(
+                    title = "Категории расходов",
+                    icon = Icons.Filled.AttachMoney,
+                    selected = currentScreen == "Справочники/Категории расходов",
+                    onClick = { onNavigate("Справочники/Категории расходов") },
+                    indent = true
+                )
+                DrawerRow(
+                    title = "Единицы измерения",
+                    icon = Icons.Filled.Straighten,
+                    selected = currentScreen == "Справочники/Единицы измерения",
+                    onClick = { onNavigate("Справочники/Единицы измерения") },
+                    indent = true
+                )
+                DrawerRow(
+                    title = "Налоги",
+                    icon = Icons.Filled.MoneyOff,
+                    selected = currentScreen == "Справочники/Налоги",
+                    onClick = { onNavigate("Справочники/Налоги") },
+                    indent = true
+                )
+            }
+
+            DrawerRow(
+                title = "Бекапы",
+                icon = Icons.Filled.CloudDownload,
+                selected = currentScreen == "Бекапы",
+                onClick = { onNavigate("Бекапы") }
+            )
+        }
+    }
+
+    @Composable
+    fun DrawerRow(
+        title: String,
+        icon: ImageVector,
+        selected: Boolean,
+        onClick: () -> Unit,
+        indent: Boolean = false,
+        trailingIcon: ImageVector? = null
+    ) {
+        NavigationDrawerItem(
+            icon = {
                 Icon(
-                    imageVector = it,
-                    contentDescription = null,
+                    imageVector = icon,
+                    contentDescription = title,
+                    modifier = Modifier.size(if (indent) 24.dp else 32.dp),
                     tint = Color.White
                 )
-            }
-        },
-        selected = selected,
-        onClick = onClick,
-        modifier = if (indent) Modifier.padding(start = 24.dp) else Modifier,
-        colors = NavigationDrawerItemDefaults.colors(
-            selectedContainerColor = Color(0xFF4A8025),
-            unselectedContainerColor = Color.Transparent,
-            selectedTextColor = Color.White,
-            unselectedTextColor = Color.White,
-            selectedIconColor = Color.White,
-            unselectedIconColor = Color.White
+            },
+            label = {
+                Text(
+                    text = title,
+                    fontSize = if (indent) 18.sp else 24.sp,
+                    color = Color.White
+                )
+            },
+            badge = trailingIcon?.let {
+                {
+                    Icon(
+                        imageVector = it,
+                        contentDescription = null,
+                        tint = Color.White
+                    )
+                }
+            },
+            selected = selected,
+            onClick = onClick,
+            modifier = if (indent) Modifier.padding(start = 24.dp) else Modifier,
+            colors = NavigationDrawerItemDefaults.colors(
+                selectedContainerColor = Color(0xFF4A8025),
+                unselectedContainerColor = Color.Transparent,
+                selectedTextColor = Color.White,
+                unselectedTextColor = Color.White,
+                selectedIconColor = Color.White,
+                unselectedIconColor = Color.White
+            )
         )
-    )
+    }
 }

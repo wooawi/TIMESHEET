@@ -49,14 +49,29 @@ data class LedgerEntry(
     val quantity: Double = 0.0,
     // ДОБАВЛЕНО (ТЗ «настроить правильную математику»): доплаты/удержания,
     // применённые к этой смене (переносятся из шаблона смены при применении).
-    val surchargeIds: List<String> = emptyList()
+    val surchargeIds: List<String> = emptyList(),
+    // ДОБАВЛЕНО (диалог «Смена» по макету): неоплачиваемые перерывы (минуты),
+    // признак «Оплата сверхурочных часов» и привязанный проект.
+    val unpaidBreakMinutes: Int = 0,
+    val overtimeEnabled: Boolean = false,
+    val projectName: String = "",
+    // ДОБАВЛЕНО (ТЗ «сделать открытие галереи/файлов настоящими»): реальные вложения
+    // записи — content:// URI файлов/фото, выбранных через системный выбор файлов.
+    val attachments: List<String> = emptyList()
 ) {
+    /** Полная длительность смены по времени начала/конца (без вычета перерывов). */
     fun calculateHours(): Double {
         if (startTime == null || endTime == null) return hours
         val start = startTime.toSecondOfDay()
         val end = endTime.toSecondOfDay()
         val diffSeconds = if (end >= start) end - start else (end + 86400) - start
         return diffSeconds / 3600.0
+    }
+
+    /** Оплачиваемые часы = длительность смены минус неоплачиваемые перерывы. */
+    fun calculatePaidHours(): Double {
+        val raw = calculateHours() - unpaidBreakMinutes / 60.0
+        return if (raw < 0.0) 0.0 else raw
     }
 }
 

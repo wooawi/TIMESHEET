@@ -65,7 +65,9 @@ fun ShiftJournalScreen(
     onFilterClick: () -> Unit,
     onEditEntry: (LedgerEntry) -> Unit,
     onDeleteEntry: (String) -> Unit,
-    onPeriodChange: (LocalDate, LocalDate) -> Unit = { _, _ -> }
+    onPeriodChange: (LocalDate, LocalDate) -> Unit = { _, _ -> },
+    onRecalculateEntry: (String) -> Unit = {},
+    onAttachmentsChanged: (String, List<String>) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val dateFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
@@ -216,8 +218,8 @@ fun ShiftJournalScreen(
                             timeTypes = timeTypes, // Передаем справочник типов времени
                             onEdit = { onEditEntry(it) },
                             onDelete = { onDeleteEntry(it) },
-                            onRecalculate = {},
-                            onAttachments = { /* TODO: открыть диалог выбора файла/фото */ }
+                            onRecalculate = { onRecalculateEntry(it) },
+                            onAttachmentsChanged = onAttachmentsChanged
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                     }

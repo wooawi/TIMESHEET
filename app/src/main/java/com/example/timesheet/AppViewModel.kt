@@ -76,6 +76,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _reportPeriodStart.value = start
         _reportPeriodEnd.value = end
         _reportQuickPeriodId.value = null
+        _currentMonth.value = YearMonth.from(start)
         persistLocalSnapshot()
     }
 
@@ -85,6 +86,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _reportPeriodStart.value = start
         _reportPeriodEnd.value = end
         _reportQuickPeriodId.value = periodId
+        _currentMonth.value = YearMonth.from(start)
         persistLocalSnapshot()
     }
 
@@ -102,10 +104,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ========== НАВИГАЦИЯ ПО МЕСЯЦАМ ==========
-    fun nextMonth() { _currentMonth.value = _currentMonth.value.plusMonths(1) }
-    fun previousMonth() { _currentMonth.value = _currentMonth.value.minusMonths(1) }
-    fun goToMonth(month: YearMonth) {
+    // ИЗМЕНЕНО (ТЗ: «кнопка выбора периода должна реально влиять на отображение
+    // смен на главной странице»): раньше currentMonth и «Настроить период»
+    // (reportPeriodStart/End) были двумя независимыми, никак не связанными
+    // источниками правды, поэтому на главном экране список смен фильтровался
+    // только по currentMonth, а изменение периода в «Настроить период» на него
+    // не влияло вообще. Теперь стрелки/выбор месяца тоже двигают настроенный
+    // период (на границы этого календарного месяца), а «Настроить период»
+    // применяется тем же способом — единый период, который реально видно
+    // на главном экране.
+    fun nextMonth() = setCurrentMonth(_currentMonth.value.plusMonths(1))
+    fun previousMonth() = setCurrentMonth(_currentMonth.value.minusMonths(1))
+    fun goToMonth(month: YearMonth) = setCurrentMonth(month)
+
+    private fun setCurrentMonth(month: YearMonth) {
         _currentMonth.value = month
+        _reportPeriodStart.value = month.atDay(1)
+        _reportPeriodEnd.value = month.atEndOfMonth()
+        _reportQuickPeriodId.value = null
         persistLocalSnapshot()
     }
 
@@ -186,6 +202,34 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _entries.value = _entries.value.filterNot { it.id == id }
         syncLaunch { FirebaseRepository.deleteEntry(id) }
         persistLocalSnapshot()
+    }
+
+    // ДОБАВЛЕНО (ТЗ: «сделать логику пересчета»).
+    // Для смены (SHIFT) сумма может быть вручную переопределена в поле «Основная
+    // оплата» диалога «Смена» (LedgerEntry.amount > 0 — см. PayrollCalculator.shiftBaseAmount).
+    // «Пересчитать» сбрасывает это ручное переопределение и часы, заставляя сумму
+    // и часы снова считаться по формуле: оплачиваемые часы × ставка × коэффициент
+    // типа смены (+ доплаты/удержания), пересчитанные из фактического start/end.
+    // Для остальных типов записи (Выплата/Налог/Доплата,удержание/Расход) сумма
+    // всегда вводится вручную и не имеет отдельной формулы — пересчитывать нечего,
+    // поэтому запись не изменяется.
+    fun recalculateEntry(id: String) {
+        val entry = _entries.value.find { it.id == id } ?: return
+        if (entry.type != EntryType.SHIFT) return
+
+        val recalculated = entry.copy(
+            amount = 0.0,
+            hours = entry.calculateHours()
+        )
+        updateEntry(recalculated)
+    }
+
+    // ДОБАВЛЕНО (ТЗ: «сделать открытие галереи/файлов настоящими»): сохраняем
+    // реальные URI файлов/фото, выбранных через системный выбор документов,
+    // в списке вложений записи.
+    fun addAttachments(entryId: String, uris: List<String>) {
+        val entry = _entries.value.find { it.id == entryId } ?: return
+        updateEntry(entry.copy(attachments = uris))
     }
 
     fun setOpeningBalance(value: Double) {

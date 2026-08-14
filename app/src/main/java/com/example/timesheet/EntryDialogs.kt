@@ -75,6 +75,11 @@ fun AddEntryDialog(
     var expenseCategoryMenuOpen by remember { mutableStateOf(false) }
     var unitMenuOpen by remember { mutableStateOf(false) }
 
+    // ДОБАВЛЕНО (ТЗ: «сделать нормальный календарь и время тоже»)
+    var showDatePicker by remember { mutableStateOf(false) }
+    var showStartTimePicker by remember { mutableStateOf(false) }
+    var showEndTimePicker by remember { mutableStateOf(false) }
+
     val employeeName = employees.firstOrNull { it.id == employeeId }?.name ?: "Я"
     val organizationName = organizations.firstOrNull { it.id == organizationId }?.name ?: "Я"
     val dateFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy г. EEE")
@@ -97,7 +102,7 @@ fun AddEntryDialog(
                     readOnly = true,
                     modifier = Modifier.fillMaxWidth(),
                     trailingIcon = {
-                        TextButton(onClick = { /* TODO: DatePicker */ }) {
+                        TextButton(onClick = { showDatePicker = true }) {
                             Text("Выбрать")
                         }
                     }
@@ -114,7 +119,7 @@ fun AddEntryDialog(
                             readOnly = true,
                             modifier = Modifier.weight(1f),
                             trailingIcon = {
-                                TextButton(onClick = { /* TODO: TimePicker */ }) {
+                                TextButton(onClick = { showStartTimePicker = true }) {
                                     Text("🕐")
                                 }
                             }
@@ -127,7 +132,7 @@ fun AddEntryDialog(
                             readOnly = true,
                             modifier = Modifier.weight(1f),
                             trailingIcon = {
-                                TextButton(onClick = { /* TODO: TimePicker */ }) {
+                                TextButton(onClick = { showEndTimePicker = true }) {
                                     Text("🕐")
                                 }
                             }
@@ -395,4 +400,37 @@ fun AddEntryDialog(
             TextButton(onClick = onDismiss) { Text("Отмена") }
         }
     )
+
+    if (showDatePicker) {
+        AppDatePickerDialog(
+            initialDate = date,
+            onDismiss = { showDatePicker = false },
+            onConfirm = {
+                date = it
+                showDatePicker = false
+            }
+        )
+    }
+
+    if (showStartTimePicker) {
+        AppTimePickerDialog(
+            initialTime = startTime ?: LocalTime.of(8, 0),
+            onDismiss = { showStartTimePicker = false },
+            onConfirm = {
+                startTime = it
+                showStartTimePicker = false
+            }
+        )
+    }
+
+    if (showEndTimePicker) {
+        AppTimePickerDialog(
+            initialTime = endTime ?: LocalTime.of(17, 0),
+            onDismiss = { showEndTimePicker = false },
+            onConfirm = {
+                endTime = it
+                showEndTimePicker = false
+            }
+        )
+    }
 }
