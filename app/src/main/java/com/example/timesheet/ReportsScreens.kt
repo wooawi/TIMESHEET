@@ -134,7 +134,9 @@ private fun ReportBreakdownRow(label: String, value: Double, bold: Boolean = fal
     }
 }
 
-private fun payslipRows(breakdown: PayrollBreakdown, periodLabelText: String): List<List<String>> {
+// ИЗМЕНЕНО: было private (файл-скоуп в Kotlin) — теперь используется также
+// из IncomeReportScreen.kt (выдвижная панель «Доход» с вкладками из ТЗ).
+internal fun payslipRows(breakdown: PayrollBreakdown, periodLabelText: String): List<List<String>> {
     val totalIncome = breakdown.accrued - breakdown.payments - breakdown.taxes + breakdown.adjustments - breakdown.expenses
     return listOf(
         listOf("Период", periodLabelText),

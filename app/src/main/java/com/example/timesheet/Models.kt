@@ -55,6 +55,11 @@ data class LedgerEntry(
     val unpaidBreakMinutes: Int = 0,
     val overtimeEnabled: Boolean = false,
     val projectName: String = "",
+    // ДОБАВЛЕНО (ТЗ: полноэкранные диалоги «Доплата, удержание» и «Запись табеля»):
+    // выбранный тип доплаты/удержания (включая собственные варианты пользователя)
+    // и привязка к записи справочника «Типы времени» для записей табеля.
+    val adjustmentTypeName: String = "",
+    val timeTypeId: String? = null,
     // ДОБАВЛЕНО (ТЗ «сделать открытие галереи/файлов настоящими»): реальные вложения
     // записи — content:// URI файлов/фото, выбранных через системный выбор файлов.
     val attachments: List<String> = emptyList()
@@ -117,9 +122,34 @@ fun defaultUnits(): List<UnitOfMeasure> = listOf(
     UnitOfMeasure("unit_piece", "Штука", "шт")
 )
 
-fun defaultTimeTypes(): List<TimeType> = emptyList()
-fun defaultExpenseCategories(): List<ExpenseCategory> = emptyList()
-fun defaultTaxes(): List<Tax> = emptyList()
+// ДОБАВЛЕНО (ТЗ: «Сделать в справочнике встроенными данные категории (с
+// возможностью редактирования)»): раньше все три фабрики возвращали пустой
+// список — экраны «Типы времени» / «Категории расходов» / «Налоги» были
+// пустыми при первом запуске. Данные ниже и порядок цветов взяты из
+// референс-скриншотов в ТЗ. isBuiltIn = true просто помечает происхождение
+// записи (сама фабрика), удаление/редактирование этим не ограничено —
+// экраны и так уже поддерживают и то, и другое.
+fun defaultTimeTypes(): List<TimeType> = listOf(
+    TimeType(id = "tt_sick", name = "Больничный", code = "Б", color = "#8395A7", isBuiltIn = true),
+    TimeType(id = "tt_evening", name = "Вечерняя смена", code = "В", color = "#48DBFB", isBuiltIn = true),
+    TimeType(id = "tt_holiday", name = "Выходные и нерабочие праздничные", code = "ВП", color = "#FF6FB7", isBuiltIn = true),
+    TimeType(id = "tt_day", name = "Дневная смена", code = "Д", color = "#5CA02F", isBuiltIn = true),
+    TimeType(id = "tt_unpaid_vacation", name = "Неоплачиваемый отпуск", code = "ДО", color = "#10AC84", isBuiltIn = true),
+    TimeType(id = "tt_night", name = "Ночная смена", code = "Н", color = "#8395A7", isBuiltIn = true),
+    TimeType(id = "tt_paid_vacation", name = "Оплачиваемый отпуск", code = "ОТ", color = "#5F27CD", isBuiltIn = true),
+    TimeType(id = "tt_business_trip", name = "Служебная командировка", code = "К", color = "#FF9F43", isBuiltIn = true)
+)
+
+fun defaultExpenseCategories(): List<ExpenseCategory> = listOf(
+    ExpenseCategory(id = "ec_transport", name = "Проезд", isBuiltIn = true),
+    ExpenseCategory(id = "ec_accommodation", name = "Проживание", isBuiltIn = true),
+    ExpenseCategory(id = "ec_other", name = "Прочее", isBuiltIn = true),
+    ExpenseCategory(id = "ec_fuel", name = "Топливо/километраж", isBuiltIn = true)
+)
+
+fun defaultTaxes(): List<Tax> = listOf(
+    Tax(id = "tax_ndfl", name = "НДФЛ", rate = 13.0, isBuiltIn = true)
+)
 
 data class AppState(
     val employees: List<Employee> = emptyList(),

@@ -45,6 +45,7 @@ import com.example.timesheet.data.LedgerEntry
 import com.example.timesheet.data.ShiftType
 import com.example.timesheet.data.TimeType
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @Composable
 fun JournalEntryItem(
@@ -55,9 +56,6 @@ fun JournalEntryItem(
     onEdit: (LedgerEntry) -> Unit = {},
     onDelete: (String) -> Unit = {},
     onRecalculate: (String) -> Unit = {},
-    // ИЗМЕНЕНО (ТЗ «сделать открытие галереи/файлов настоящими»): вместо заглушки
-    // без параметров теперь передаём id записи и итоговый список URI вложений —
-    // сам выбор файла/фото происходит здесь же, через системный выбор документов.
     onAttachmentsChanged: (String, List<String>) -> Unit = { _, _ -> }
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -80,36 +78,61 @@ fun JournalEntryItem(
         }
     }
 
-    val dateFormatter = DateTimeFormatter.ofPattern("d MMM yyyy г. EEE")
-    val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+    val dateFormatter = DateTimeFormatter.ofPattern("d MMM yyyy 'г.' EEE", Locale("ru"))
+    val timeFormatter = DateTimeFormatter.ofPattern("HH:mm", Locale("ru"))
 
-    val shiftColor = if (entry.type == EntryType.SHIFT) {
+    fun formatEntryDate(date: java.time.LocalDate): String {
+        val formatted = date.format(dateFormatter)
+        val lastSpace = formatted.lastIndexOf(' ')
+        return if (lastSpace == -1) formatted else {
+            formatted.substring(0, lastSpace + 1) + formatted.substring(lastSpace + 1).uppercase(Locale("ru"))
+        }
+    }
+
+    /**
+     * Цвет смены определяется из справочника «Типы времени» по названию типа смены.
+     * Теперь справочник напрямую связан с проектом — изменение цвета в справочнике
+     * сразу меняет отображение во всех записях.
+     */
+    fun getShiftColor(): Color {
+        if (entry.type != EntryType.SHIFT) return Color.Transparent
+
         val shiftTypeName = when (entry.shiftType) {
-            ShiftType.DAY -> "Дневная"
-            ShiftType.NIGHT -> "Ночная"
+            ShiftType.DAY -> "Дневная смена"
+            ShiftType.NIGHT -> "Ночная смена"
             ShiftType.HOLIDAY -> "Праздничная"
             ShiftType.OVERTIME -> "Сверхурочная"
             ShiftType.WEEKEND -> "Выходной день"
         }
+
+        // Ищем совпадение по имени типа смены в справочнике
         val timeType = timeTypes.find { it.name == shiftTypeName }
-        if (timeType != null) {
-            try {
+        if (timeType != null && timeType.color.isNotBlank()) {
+            return try {
                 Color(android.graphics.Color.parseColor(timeType.color))
             } catch (e: Exception) {
-                Color(0xFF4CAF50)
-            }
-        } else {
-            when (entry.shiftType) {
-                ShiftType.DAY -> Color(0xFF4CAF50)
-                ShiftType.NIGHT -> Color(0xFF2196F3)
-                ShiftType.HOLIDAY -> Color(0xFFFF9800)
-                ShiftType.OVERTIME -> Color(0xFF9C27B0)
-                ShiftType.WEEKEND -> Color(0xFFF44336)
+                // Fallback на стандартные цвета, если парсинг не удался
+                when (entry.shiftType) {
+                    ShiftType.DAY -> Color(0xFF4CAF50)
+                    ShiftType.NIGHT -> Color(0xFF2196F3)
+                    ShiftType.HOLIDAY -> Color(0xFFFF9800)
+                    ShiftType.OVERTIME -> Color(0xFF9C27B0)
+                    ShiftType.WEEKEND -> Color(0xFFF44336)
+                }
             }
         }
-    } else {
-        Color.Transparent
+
+        // Если тип не найден в справочнике — используем стандартные цвета
+        return when (entry.shiftType) {
+            ShiftType.DAY -> Color(0xFF4CAF50)
+            ShiftType.NIGHT -> Color(0xFF2196F3)
+            ShiftType.HOLIDAY -> Color(0xFFFF9800)
+            ShiftType.OVERTIME -> Color(0xFF9C27B0)
+            ShiftType.WEEKEND -> Color(0xFFF44336)
+        }
     }
+
+    val shiftColor = getShiftColor()
 
     Row(
         modifier = Modifier
@@ -162,15 +185,18 @@ fun JournalEntryItem(
                         val hoursInt = hours.toInt()
                         val minutes = ((hours - hoursInt) * 60).toInt()
 
-                        val breakHours = 1
-                        val breakMinutes = 0
+                        val paidHours = entry.calculatePaidHours()
+                        val paidHoursInt = paidHours.toInt()
+                        val paidMinutes = ((paidHours - paidHoursInt) * 60).toInt()
+                        val breakHours = entry.unpaidBreakMinutes / 60
+                        val breakMinutes = entry.unpaidBreakMinutes % 60
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "${entry.date.format(dateFormatter)}, $startStr - $endStr, ${hoursInt}ч ${minutes.toString().padStart(2, '0')}м",
+                                text = "${formatEntryDate(entry.date)}, $startStr - $endStr, ${hoursInt}ч ${minutes.toString().padStart(2, '0')}м",
                                 fontSize = 14.sp,
                                 color = Color(0xFF333333),
                                 modifier = Modifier.weight(1f),
@@ -219,7 +245,7 @@ fun JournalEntryItem(
                             horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             Text(
-                                text = "${hoursInt}ч ${minutes.toString().padStart(2, '0')}м",
+                                text = "${paidHoursInt}ч ${paidMinutes.toString().padStart(2, '0')}м",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = Color(0xFF2E7D32)
@@ -267,7 +293,7 @@ fun JournalEntryItem(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "${entry.date.format(dateFormatter)}, 00:00",
+                                text = "${formatEntryDate(entry.date)}, ${entry.startTime?.format(timeFormatter) ?: "00:00"}",
                                 fontSize = 14.sp,
                                 color = Color(0xFF333333),
                                 modifier = Modifier.weight(1f),
@@ -305,7 +331,7 @@ fun JournalEntryItem(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "${entry.date.format(dateFormatter)}, 00:00",
+                                text = "${formatEntryDate(entry.date)}, ${entry.startTime?.format(timeFormatter) ?: "00:00"}",
                                 fontSize = 14.sp,
                                 color = Color(0xFF333333),
                                 modifier = Modifier.weight(1f),
@@ -343,7 +369,7 @@ fun JournalEntryItem(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "${entry.date.format(dateFormatter)}, 00:00",
+                                text = "${formatEntryDate(entry.date)}, ${entry.startTime?.format(timeFormatter) ?: "00:00"}",
                                 fontSize = 14.sp,
                                 color = Color(0xFF333333),
                                 modifier = Modifier.weight(1f),
@@ -381,7 +407,7 @@ fun JournalEntryItem(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "${entry.date.format(dateFormatter)}, 00:00",
+                                text = "${formatEntryDate(entry.date)}, ${entry.startTime?.format(timeFormatter) ?: "00:00"}",
                                 fontSize = 14.sp,
                                 color = Color(0xFF333333),
                                 modifier = Modifier.weight(1f),
@@ -436,11 +462,6 @@ fun JournalEntryItem(
                     Spacer(modifier = Modifier.height(8.dp))
                     Divider()
 
-                    // ИСПРАВЛЕНО (ТЗ «исправить ошибку того что не влазит текст»):
-                    // раньше это была обычная Row без переноса и без прокрутки — на узких
-                    // экранах последней кнопке не хватало места, и её текст сжимался в
-                    // вертикальный "столбик" из букв. Прокручиваемая Row гарантирует, что
-                    // кнопки никогда не сжимаются меньше своего естественного размера.
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -502,8 +523,6 @@ fun JournalEntryItem(
                         }
                     }
 
-                    // ДОБАВЛЕНО: реальный список вложений — каждое открывается через
-                    // системное приложение (галерею/просмотрщик файлов) по его типу.
                     if (entry.attachments.isNotEmpty()) {
                         Column(modifier = Modifier.padding(top = 4.dp)) {
                             entry.attachments.forEach { uriString ->

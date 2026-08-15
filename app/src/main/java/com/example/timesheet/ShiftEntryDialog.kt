@@ -62,14 +62,12 @@ private fun shiftTypeLabel(type: ShiftType): String = when (type) {
 }
 
 /**
- * ДОБАВЛЕНО: полноэкранный диалог «Смена» по макету — вкладки
- * «ОСНОВНАЯ ОПЛАТА» / «ДОПЛАТЫ И УДЕРЖАНИЯ», поле «Неоплачиваемые перерывы»,
- * переключатель «Оплата сверхурочных часов», поле «Проект».
- *
- * Используется только для записей типа SHIFT;
- * для остальных типов (Выплата/Налог/Доплата,удержание/Расход)
- * по-прежнему используется AddEntryDialog.
+ * Вспомогательная функция для фильтрации ввода в денежных полях
  */
+private fun moneyInputFilter(input: String): String {
+    return input.filter { c -> c.isDigit() || c == '.' || c == ',' }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ShiftEntryDialog(
@@ -156,22 +154,21 @@ fun ShiftEntryDialog(
     var shiftTypeMenuOpen by remember { mutableStateOf(false) }
     var projectMenuOpen by remember { mutableStateOf(false) }
 
-    // ДОБАВЛЕНО (ТЗ: «сделать нормальный календарь и время тоже»)
     var showDatePicker by remember { mutableStateOf(false) }
     var showStartTimePicker by remember { mutableStateOf(false) }
     var showEndTimePicker by remember { mutableStateOf(false) }
 
     val dateFormatter =
-        DateTimeFormatter.ofPattern("d MMMM yyyy г. EEE")
+        DateTimeFormatter.ofPattern("d MMMM yyyy 'г.' EEE", java.util.Locale("ru"))
 
     val timeFormatter =
-        DateTimeFormatter.ofPattern("HH:mm")
+        DateTimeFormatter.ofPattern("HH:mm", java.util.Locale("ru"))
 
     val employeeName =
-        employees.firstOrNull { it.id == employeeId }?.name ?: "Я"
+        employees.firstOrNull { it.id == employeeId }?.name ?: "Работник"
 
     val organizationName =
-        organizations.firstOrNull { it.id == organizationId }?.name ?: "Я"
+        organizations.firstOrNull { it.id == organizationId }?.name ?: "Организация"
 
     val hourlyRate =
         employees.firstOrNull { it.id == employeeId }?.hourlyRate ?: 0.0
@@ -640,7 +637,7 @@ fun ShiftEntryDialog(
                         value = manualAmountText,
 
                         onValueChange = {
-                            manualAmountText = it
+                            manualAmountText = moneyInputFilter(it)
                         },
 
                         placeholder = {
@@ -829,8 +826,6 @@ fun ShiftEntryDialog(
             }
 
         } else {
-
-            // Вкладка «ДОПЛАТЫ И УДЕРЖАНИЯ»
 
             Column(
                 modifier = Modifier

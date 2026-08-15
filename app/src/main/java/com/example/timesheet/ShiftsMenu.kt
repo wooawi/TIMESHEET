@@ -11,7 +11,7 @@ fun ShiftsMenu(
     onDismiss: () -> Unit,
     onOpenPeriodSettings: () -> Unit = {},
     onOpenShiftJournal: () -> Unit = {},
-    onOpenTemplates: () -> Unit = {} // параметр оставлен для совместимости
+    onOpenTemplates: () -> Unit = {} // параметр оставлен для совместимости, но не используется
 ) {
     DropdownMenu(
         expanded = expanded,

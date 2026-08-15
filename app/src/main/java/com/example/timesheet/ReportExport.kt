@@ -50,6 +50,33 @@ object ReportExport {
         context.startActivity(chooser)
     }
 
+    // ДОБАВЛЕНО (ТЗ: «кнопка предв.просмотр должна тоже быть рабочей»): открывает
+    // сгенерированный файл во внешнем просмотрщике (ACTION_VIEW), в отличие от
+    // shareFile/ACTION_SEND — это именно предпросмотр, а не отправка/шаринг.
+    private fun viewFile(context: Context, file: File, mimeType: String) {
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching {
+            context.startActivity(intent)
+        }.onFailure {
+            // Нет приложения для просмотра PDF — fallback на выбор приложения через chooser
+            val chooser = Intent.createChooser(intent, "Открыть предпросмотр").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+        }
+    }
+
+    /** Предпросмотр отчёта в формате PDF без отправки — открывает файл системным просмотрщиком. */
+    fun previewAsPdf(context: Context, title: String, rows: List<List<String>>) {
+        val file = buildPdfFile(context, title, rows)
+        viewFile(context, file, "application/pdf")
+    }
+
     /** rows: список строк, каждая строка — список ячеек (обычно 2 колонки: наименование / значение). */
     fun shareAsXls(context: Context, title: String, rows: List<List<String>>) {
         val html = buildString {
@@ -69,6 +96,12 @@ object ReportExport {
     }
 
     fun shareAsPdf(context: Context, title: String, rows: List<List<String>>) {
+        val file = buildPdfFile(context, title, rows)
+        shareFile(context, file, "application/pdf")
+    }
+
+    /** Общая генерация PDF-файла — используется и предпросмотром, и отправкой. */
+    private fun buildPdfFile(context: Context, title: String, rows: List<List<String>>): File {
         val document = PdfDocument()
         val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create() // A4 @ 72dpi
         var page = document.startPage(pageInfo)
@@ -96,7 +129,7 @@ object ReportExport {
         val file = File(cacheDir(context), "${safeFileName(title)}.pdf")
         FileOutputStream(file).use { document.writeTo(it) }
         document.close()
-        shareFile(context, file, "application/pdf")
+        return file
     }
 
     private fun safeFileName(name: String): String =

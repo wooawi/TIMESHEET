@@ -80,10 +80,10 @@ fun AddEntryDialog(
     var showStartTimePicker by remember { mutableStateOf(false) }
     var showEndTimePicker by remember { mutableStateOf(false) }
 
-    val employeeName = employees.firstOrNull { it.id == employeeId }?.name ?: "Я"
-    val organizationName = organizations.firstOrNull { it.id == organizationId }?.name ?: "Я"
-    val dateFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy г. EEE")
-    val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+    val employeeName = employees.firstOrNull { it.id == employeeId }?.name ?: "Работник"
+    val organizationName = organizations.firstOrNull { it.id == organizationId }?.name ?: "Организация"
+    val dateFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy 'г.' EEE", java.util.Locale("ru"))
+    val timeFormatter = DateTimeFormatter.ofPattern("HH:mm", java.util.Locale("ru"))
 
     AlertDialog(
         onDismissRequest = onDismiss,

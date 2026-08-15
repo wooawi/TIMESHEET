@@ -62,7 +62,7 @@ fun PeriodSettingsScreen(
     var selectedQuickPeriod by remember { mutableStateOf<String?>("this_month") }
 
     val dateFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
-    val dateFormatterFull = DateTimeFormatter.ofPattern("d MMMM yyyy г. EEE")
+    val dateFormatterFull = DateTimeFormatter.ofPattern("d MMMM yyyy 'г.' EEE", java.util.Locale("ru"))
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
