@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -41,18 +43,20 @@ import com.example.timesheet.data.ExpenseCategory
 import com.example.timesheet.data.LedgerEntry
 import com.example.timesheet.data.Organization
 import com.example.timesheet.data.TimeType
+import com.example.timesheet.data.inferShiftTypeFromTimeType
+import com.example.timesheet.data.moneyInputFilter
+// ИСПРАВЛЕНО: без этого импорта файл не компилировался бы вовсе — dateRangeDays
+// используется ниже (AmountEntryDialog), а теперь ещё и в Expense/AdjustmentEntryDialog.
+import com.example.timesheet.data.dateRangeDays
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 /**
- * Вспомогательная функция для фильтрации ввода в денежных полях:
- * разрешает только цифры, точку и запятую.
+ * ИСПРАВЛЕНО: теперь используется общий com.example.timesheet.data.moneyInputFilter
+ * вместо локальной копии — одна и та же логика во всех диалогах.
  */
-private fun moneyInputFilter(input: String): String {
-    return input.filter { c -> c.isDigit() || c == '.' || c == ',' }
-}
 
 private val EntryDialogGreen = Color(0xFF5CA02F)
 
@@ -77,7 +81,13 @@ fun AmountEntryDialog(
     onConfirm: (LedgerEntry) -> Unit,
     onDelete: ((String) -> Unit)? = null
 ) {
+    val isAddMode = onDelete == null
+    val stableEntryId = remember { initialEntry?.id ?: UUID.randomUUID().toString() }
+    var rangeEnabled by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
+
     var date by remember { mutableStateOf(initialEntry?.date ?: initialDate) }
+    var rangeEndDate by remember { mutableStateOf(initialEntry?.date ?: initialDate) }
     var time by remember { mutableStateOf(initialEntry?.startTime ?: LocalTime.now()) }
     var employeeId by remember { mutableStateOf(initialEntry?.employeeId ?: preselectedEmployeeId) }
     var organizationId by remember { mutableStateOf(initialEntry?.organizationId ?: preselectedOrganizationId) }
@@ -98,7 +108,7 @@ fun AmountEntryDialog(
     val timeFormatter = entryTimeFormatter()
 
     fun buildEntry() = LedgerEntry(
-        id = initialEntry?.id ?: UUID.randomUUID().toString(),
+        id = stableEntryId,
         date = date,
         startTime = time,
         endTime = null,
@@ -122,7 +132,17 @@ fun AmountEntryDialog(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { onConfirm(buildEntry()) }) {
+                    IconButton(enabled = !isSaving, onClick = {
+                        if (isSaving) return@IconButton
+                        isSaving = true
+                        if (rangeEnabled && isAddMode) {
+                            dateRangeDays(date, rangeEndDate).forEach { d ->
+                                onConfirm(buildEntry().copy(id = UUID.randomUUID().toString(), date = d))
+                            }
+                        } else {
+                            onConfirm(buildEntry())
+                        }
+                    }) {
                         Icon(Icons.Filled.Check, contentDescription = "Сохранить", tint = Color.White)
                     }
                 },
@@ -134,6 +154,7 @@ fun AmountEntryDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
             Row(modifier = Modifier.fillMaxWidth()) {
@@ -157,6 +178,22 @@ fun AmountEntryDialog(
                     trailingIcon = {
                         TextButton(onClick = { showTimePicker = true }) { Text("🕐") }
                     }
+                )
+            }
+
+            if (isAddMode) {
+                Spacer(modifier = Modifier.height(12.dp))
+                DateRangeToggle(
+                    rangeEnabled = rangeEnabled,
+                    onRangeEnabledChange = {
+                        rangeEnabled = it
+                        if (it && rangeEndDate.isBefore(date)) rangeEndDate = date
+                    },
+                    startDate = date,
+                    endDate = rangeEndDate,
+                    onStartDateChange = { date = it },
+                    onEndDateChange = { rangeEndDate = it },
+                    dateFormatter = dateFormatter
                 )
             }
 
@@ -269,6 +306,10 @@ fun TimesheetEntryDialog(
     var organizationId by remember { mutableStateOf(preselectedOrganizationId) }
     var timeTypeId by remember { mutableStateOf<String?>(null) }
     var comment by remember { mutableStateOf("") }
+    // ДОБАВЛЕНО: та же защита от двойного тапа, что и в остальных диалогах —
+    // здесь она особенно важна, так как одно нажатие уже создаёт запись на
+    // КАЖДЫЙ день диапазона, и повторный тап до закрытия диалога удваивал бы их все.
+    var isSaving by remember { mutableStateOf(false) }
 
     var employeeMenuOpen by remember { mutableStateOf(false) }
     var organizationMenuOpen by remember { mutableStateOf(false) }
@@ -294,8 +335,10 @@ fun TimesheetEntryDialog(
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
+                    IconButton(enabled = !isSaving, onClick = {
+                        if (isSaving) return@IconButton
                         if (startDate.isAfter(endDate)) return@IconButton
+                        isSaving = true
                         val days = generateSequence(startDate) { d ->
                             if (d.isBefore(endDate)) d.plusDays(1) else null
                         }.toList()
@@ -306,6 +349,13 @@ fun TimesheetEntryDialog(
                                     type = EntryType.SHIFT,
                                     employeeId = employeeId,
                                     organizationId = organizationId,
+                                    // ИСПРАВЛЕНО (та же причина, что и в ShiftEntryDialog/Models.kt):
+                                    // раньше здесь сохранялся только timeTypeId, а поле `shiftType`
+                                    // оставалось на значении по умолчанию (ShiftType.DAY) — из-за
+                                    // этого расчёт зарплаты (PayrollCalculator, который считает по
+                                    // `shiftType`) всегда применял множитель дневной смены, что бы
+                                    // ни было выбрано в «Запись табеля».
+                                    shiftType = inferShiftTypeFromTimeType(timeTypes.find { it.id == timeTypeId }),
                                     timeTypeId = timeTypeId,
                                     note = comment
                                 )
@@ -323,6 +373,7 @@ fun TimesheetEntryDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
             Row(modifier = Modifier.fillMaxWidth()) {
@@ -454,7 +505,17 @@ fun ExpenseEntryDialog(
     onConfirm: (LedgerEntry) -> Unit,
     onDelete: ((String) -> Unit)? = null
 ) {
+    // ДОБАВЛЕНО (ТЗ: «добавить в смены и остальные вкладки промежуток дат» +
+    // «сохранения стали накладываться друг на друга»): та же логика диапазона
+    // дат и защиты от двойного тапа, что уже была в ShiftEntryDialog/AmountEntryDialog —
+    // раньше в «Расходах» была доступна только одна дата и ничто не мешало
+    // случайно создать дубль повторным нажатием «Сохранить».
+    val isAddMode = onDelete == null
+    var rangeEnabled by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
+
     var date by remember { mutableStateOf(initialEntry?.date ?: initialDate) }
+    var rangeEndDate by remember { mutableStateOf(initialEntry?.date ?: initialDate) }
     var time by remember { mutableStateOf(initialEntry?.startTime ?: LocalTime.now()) }
     var employeeId by remember { mutableStateOf(initialEntry?.employeeId ?: preselectedEmployeeId) }
     var organizationId by remember { mutableStateOf(initialEntry?.organizationId ?: preselectedOrganizationId) }
@@ -501,7 +562,20 @@ fun ExpenseEntryDialog(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { onConfirm(buildEntry()) }) {
+                    IconButton(
+                        enabled = !isSaving,
+                        onClick = {
+                            if (isSaving) return@IconButton
+                            isSaving = true
+                            if (rangeEnabled && isAddMode) {
+                                dateRangeDays(date, rangeEndDate).forEach { d ->
+                                    onConfirm(buildEntry().copy(id = UUID.randomUUID().toString(), date = d))
+                                }
+                            } else {
+                                onConfirm(buildEntry())
+                            }
+                        }
+                    ) {
                         Icon(Icons.Filled.Check, contentDescription = "Сохранить", tint = Color.White)
                     }
                 },
@@ -513,6 +587,7 @@ fun ExpenseEntryDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
             Row(modifier = Modifier.fillMaxWidth()) {
@@ -532,6 +607,22 @@ fun ExpenseEntryDialog(
                     label = { Text("Время") },
                     modifier = Modifier.width(120.dp),
                     trailingIcon = { TextButton(onClick = { showTimePicker = true }) { Text("🕐") } }
+                )
+            }
+
+            if (isAddMode) {
+                Spacer(modifier = Modifier.height(12.dp))
+                DateRangeToggle(
+                    rangeEnabled = rangeEnabled,
+                    onRangeEnabledChange = {
+                        rangeEnabled = it
+                        if (it && rangeEndDate.isBefore(date)) rangeEndDate = date
+                    },
+                    startDate = date,
+                    endDate = rangeEndDate,
+                    onStartDateChange = { date = it },
+                    onEndDateChange = { rangeEndDate = it },
+                    dateFormatter = dateFormatter
                 )
             }
 
@@ -649,6 +740,12 @@ fun AdjustmentEntryDialog(
     employees: List<Employee>,
     organizations: List<Organization>,
     projectSuggestions: List<String> = emptyList(),
+    // ДОБАВЛЕНО (ТЗ: «все вкладки должны иметь взаимосвязь и влиять друг на друга»):
+    // ранее свои варианты типа доплаты/удержания жили только внутри одного открытия
+    // диалога (`customAdjustmentTypes`) и терялись при закрытии. Теперь сюда
+    // дополнительно передаются типы, уже встречавшиеся в других записях журнала —
+    // так вкладка «подхватывает» то, что вводили в других записях.
+    adjustmentTypeSuggestions: List<String> = emptyList(),
     preselectedEmployeeId: String?,
     preselectedOrganizationId: String?,
     initialEntry: LedgerEntry? = null,
@@ -657,7 +754,14 @@ fun AdjustmentEntryDialog(
     onConfirm: (LedgerEntry) -> Unit,
     onDelete: ((String) -> Unit)? = null
 ) {
+    // ДОБАВЛЕНО: см. аналогичный комментарий в ExpenseEntryDialog — диапазон дат
+    // + защита от двойного тапа теперь и в «Доплата/удержание».
+    val isAddMode = onDelete == null
+    var rangeEnabled by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
+
     var date by remember { mutableStateOf(initialEntry?.date ?: initialDate) }
+    var rangeEndDate by remember { mutableStateOf(initialEntry?.date ?: initialDate) }
     var time by remember { mutableStateOf(initialEntry?.startTime ?: LocalTime.now()) }
     var employeeId by remember { mutableStateOf(initialEntry?.employeeId ?: preselectedEmployeeId) }
     var organizationId by remember { mutableStateOf(initialEntry?.organizationId ?: preselectedOrganizationId) }
@@ -672,12 +776,14 @@ fun AdjustmentEntryDialog(
     var newAdjustmentType by remember { mutableStateOf("") }
     var showAddAdjustmentTypeDialog by remember { mutableStateOf(false) }
 
-    val adjustmentTypes = listOf(
-        "Больничный",
-        "Оплата сверхурочных",
-        "Оплачиваемый отпуск",
-        "Исполнительный лист"
-    ) + customAdjustmentTypes
+    val adjustmentTypes = (
+            listOf(
+                "Больничный",
+                "Оплата сверхурочных",
+                "Оплачиваемый отпуск",
+                "Исполнительный лист"
+            ) + adjustmentTypeSuggestions + customAdjustmentTypes
+            ).distinct()
 
     var employeeMenuOpen by remember { mutableStateOf(false) }
     var organizationMenuOpen by remember { mutableStateOf(false) }
@@ -717,7 +823,20 @@ fun AdjustmentEntryDialog(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { onConfirm(buildEntry()) }) {
+                    IconButton(
+                        enabled = !isSaving,
+                        onClick = {
+                            if (isSaving) return@IconButton
+                            isSaving = true
+                            if (rangeEnabled && isAddMode) {
+                                dateRangeDays(date, rangeEndDate).forEach { d ->
+                                    onConfirm(buildEntry().copy(id = UUID.randomUUID().toString(), date = d))
+                                }
+                            } else {
+                                onConfirm(buildEntry())
+                            }
+                        }
+                    ) {
                         Icon(Icons.Filled.Check, contentDescription = "Сохранить", tint = Color.White)
                     }
                 },
@@ -729,6 +848,7 @@ fun AdjustmentEntryDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
             Row(modifier = Modifier.fillMaxWidth()) {
@@ -748,6 +868,22 @@ fun AdjustmentEntryDialog(
                     label = { Text("Время") },
                     modifier = Modifier.width(120.dp),
                     trailingIcon = { TextButton(onClick = { showTimePicker = true }) { Text("🕐") } }
+                )
+            }
+
+            if (isAddMode) {
+                Spacer(modifier = Modifier.height(12.dp))
+                DateRangeToggle(
+                    rangeEnabled = rangeEnabled,
+                    onRangeEnabledChange = {
+                        rangeEnabled = it
+                        if (it && rangeEndDate.isBefore(date)) rangeEndDate = date
+                    },
+                    startDate = date,
+                    endDate = rangeEndDate,
+                    onStartDateChange = { date = it },
+                    onEndDateChange = { rangeEndDate = it },
+                    dateFormatter = dateFormatter
                 )
             }
 

@@ -41,9 +41,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.timesheet.data.EntryType
+import com.example.timesheet.data.ExpenseCategory
 import com.example.timesheet.data.LedgerEntry
 import com.example.timesheet.data.ShiftType
 import com.example.timesheet.data.TimeType
+import com.example.timesheet.data.UnitOfMeasure
+import com.example.timesheet.data.shiftTypeTimeTypeId
+import com.example.timesheet.data.displayShiftLabel
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -53,6 +57,11 @@ fun JournalEntryItem(
     employeeName: String?,
     organizationName: String?,
     timeTypes: List<TimeType> = emptyList(),
+    // ДОБАВЛЕНО (ТЗ: справочники должны быть связаны со всем проектом): чтобы в
+    // журнале показывались настоящие названия категории расхода и единицы
+    // измерения, а не их внутренние id.
+    expenseCategories: List<ExpenseCategory> = emptyList(),
+    units: List<UnitOfMeasure> = emptyList(),
     onEdit: (LedgerEntry) -> Unit = {},
     onDelete: (String) -> Unit = {},
     onRecalculate: (String) -> Unit = {},
@@ -90,35 +99,32 @@ fun JournalEntryItem(
     }
 
     /**
-     * Цвет смены определяется из справочника «Типы времени» по названию типа смены.
-     * Теперь справочник напрямую связан с проектом — изменение цвета в справочнике
-     * сразу меняет отображение во всех записях.
+     * ИСПРАВЛЕНО (ТЗ: «единая связь со всеми вкладками» — цвет и название типа
+     * смены теперь берутся напрямую из справочника по `entry.timeTypeId` (тому
+     * же id, что выбирается в диалоге «Смена»), а не по старому фиксированному
+     * enum. Для старых записей без `timeTypeId` (созданных до этого исправления)
+     * остаётся резервный поиск по `shiftTypeTimeTypeId`.
      */
+    val selectedTimeType = if (entry.type == EntryType.SHIFT) {
+        timeTypes.find { it.id == entry.timeTypeId }
+            ?: timeTypes.find { it.id == shiftTypeTimeTypeId(entry.shiftType) }
+    } else {
+        null
+    }
+
     fun getShiftColor(): Color {
         if (entry.type != EntryType.SHIFT) return Color.Transparent
 
-        val shiftTypeName = when (entry.shiftType) {
-            ShiftType.DAY -> "Дневная смена"
-            ShiftType.NIGHT -> "Ночная смена"
-            ShiftType.HOLIDAY -> "Праздничная"
-            ShiftType.OVERTIME -> "Сверхурочная"
-            ShiftType.WEEKEND -> "Выходной день"
-        }
+        // ИСПРАВЛЕНО: включённая «Оплата сверхурочных часов» теперь заметна и по
+        // цвету полосы слева — фиолетовый (цвет ShiftType.OVERTIME), даже если
+        // выбранный тип из справочника — «Дневная смена».
+        if (entry.overtimeEnabled) return Color(0xFF9C27B0)
 
-        // Ищем совпадение по имени типа смены в справочнике
-        val timeType = timeTypes.find { it.name == shiftTypeName }
-        if (timeType != null && timeType.color.isNotBlank()) {
+        if (selectedTimeType != null && selectedTimeType.color.isNotBlank()) {
             return try {
-                Color(android.graphics.Color.parseColor(timeType.color))
+                Color(android.graphics.Color.parseColor(selectedTimeType.color))
             } catch (e: Exception) {
-                // Fallback на стандартные цвета, если парсинг не удался
-                when (entry.shiftType) {
-                    ShiftType.DAY -> Color(0xFF4CAF50)
-                    ShiftType.NIGHT -> Color(0xFF2196F3)
-                    ShiftType.HOLIDAY -> Color(0xFFFF9800)
-                    ShiftType.OVERTIME -> Color(0xFF9C27B0)
-                    ShiftType.WEEKEND -> Color(0xFFF44336)
-                }
+                Color(0xFF4CAF50)
             }
         }
 
@@ -174,13 +180,16 @@ fun JournalEntryItem(
                     EntryType.SHIFT -> {
                         val startStr = entry.startTime?.format(timeFormatter) ?: "--:--"
                         val endStr = entry.endTime?.format(timeFormatter) ?: "--:--"
-                        val shiftTypeName = when (entry.shiftType) {
-                            ShiftType.DAY -> "Дневная"
-                            ShiftType.NIGHT -> "Ночная"
-                            ShiftType.HOLIDAY -> "Праздничная"
-                            ShiftType.OVERTIME -> "Сверхурочная"
-                            ShiftType.WEEKEND -> "Выходной день"
-                        }
+                        val shiftTypeName = displayShiftLabel(
+                            selectedTimeType?.name ?: when (entry.shiftType) {
+                                ShiftType.DAY -> "Дневная"
+                                ShiftType.NIGHT -> "Ночная"
+                                ShiftType.HOLIDAY -> "Праздничная"
+                                ShiftType.OVERTIME -> "Сверхурочная"
+                                ShiftType.WEEKEND -> "Выходной день"
+                            },
+                            entry.overtimeEnabled
+                        )
                         val hours = entry.calculateHours()
                         val hoursInt = hours.toInt()
                         val minutes = ((hours - hoursInt) * 60).toInt()
@@ -221,7 +230,8 @@ fun JournalEntryItem(
                             Text(
                                 text = shiftTypeName,
                                 fontSize = 14.sp,
-                                color = Color.DarkGray,
+                                color = if (entry.overtimeEnabled) Color(0xFF9C27B0) else Color.DarkGray,
+                                fontWeight = if (entry.overtimeEnabled) FontWeight.Bold else FontWeight.Normal,
                                 modifier = Modifier.weight(1f),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -390,6 +400,27 @@ fun JournalEntryItem(
                             fontSize = 14.sp,
                             color = Color.DarkGray
                         )
+                        // ДОБАВЛЕНО (ТЗ: справочники/вкладки должны быть связаны с проектом):
+                        // тип доплаты/удержания и проект, выбранные в диалоге, раньше нигде
+                        // не отображались в журнале — теперь видны сразу в списке.
+                        if (entry.adjustmentTypeName.isNotBlank()) {
+                            Text(
+                                text = entry.adjustmentTypeName,
+                                fontSize = 13.sp,
+                                color = Color.Gray,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        if (entry.projectName.isNotBlank()) {
+                            Text(
+                                text = "Проект: ${entry.projectName}",
+                                fontSize = 12.sp,
+                                color = Color.Gray,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                         if (entry.note.isNotBlank()) {
                             Text(
                                 text = entry.note,
@@ -402,6 +433,8 @@ fun JournalEntryItem(
                     }
 
                     EntryType.EXPENSE -> {
+                        val categoryName = expenseCategories.firstOrNull { it.id == entry.expenseCategoryId }?.name
+                        val unitName = units.firstOrNull { it.id == entry.unitId }?.name ?: entry.unitId
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -428,9 +461,12 @@ fun JournalEntryItem(
                             fontSize = 14.sp,
                             color = Color.DarkGray
                         )
-                        if (entry.expenseCategoryId != null) {
+                        // ИСПРАВЛЕНО (ТЗ: справочники должны быть связаны с проектом):
+                        // раньше здесь показывался внутренний id категории/единицы, а не
+                        // название из справочника — теперь резолвим настоящее имя.
+                        if (!categoryName.isNullOrBlank()) {
                             Text(
-                                text = "Категория: ${entry.expenseCategoryId}",
+                                text = "Категория: $categoryName",
                                 fontSize = 12.sp,
                                 color = Color.Gray,
                                 maxLines = 1,
@@ -439,7 +475,7 @@ fun JournalEntryItem(
                         }
                         if (entry.unitId != null && entry.quantity > 0) {
                             Text(
-                                text = "Количество: ${entry.quantity} ${entry.unitId}",
+                                text = "Количество: ${entry.quantity} ${unitName ?: ""}",
                                 fontSize = 12.sp,
                                 color = Color.Gray,
                                 maxLines = 1,

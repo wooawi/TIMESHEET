@@ -27,7 +27,8 @@ object PayrollCalculator {
         employeeFilter: String?,
         organizationFilter: String?,
         openingBalance: Double,
-        surcharges: List<Surcharge> = emptyList()
+        surcharges: List<Surcharge> = emptyList(),
+        timeTypes: List<TimeType> = emptyList()
     ): PayrollBreakdown {
         return calculateForPeriod(
             entries = entries,
@@ -37,7 +38,8 @@ object PayrollCalculator {
             end = month.atEndOfMonth(),
             employeeFilter = employeeFilter,
             organizationFilter = organizationFilter,
-            openingBalance = openingBalance
+            openingBalance = openingBalance,
+            timeTypes = timeTypes
         )
     }
 
@@ -53,7 +55,8 @@ object PayrollCalculator {
         end: LocalDate,
         employeeFilter: String?,
         organizationFilter: String?,
-        openingBalance: Double
+        openingBalance: Double,
+        timeTypes: List<TimeType> = emptyList()
     ): PayrollBreakdown {
         val filtered = entries.filter { entry ->
             !entry.date.isBefore(start) && !entry.date.isAfter(end) &&
@@ -75,7 +78,7 @@ object PayrollCalculator {
                 EntryType.SHIFT -> {
                     totalHours += entry.calculatePaidHours()
                     val rate = entry.employeeId?.let { rateByEmployee[it] } ?: 0.0
-                    accrued += shiftTotalAmount(entry, rate, surcharges)
+                    accrued += shiftTotalAmount(entry, rate, surcharges, timeTypes)
                 }
                 EntryType.PAYMENT -> payments += entry.amount
                 EntryType.TAX -> taxes += entry.amount
@@ -101,17 +104,31 @@ object PayrollCalculator {
     }
 
     /**
-     * Множитель оплаты за тип смены. Если включена «Оплата сверхурочных часов»
-     * (LedgerEntry.overtimeEnabled, поле из диалога «Смена» по макету), множитель
-     * не может быть ниже 1.5 — это ставка сверхурочных.
+     * ИСПРАВЛЕНО (ТЗ: «пусть новые пользовательские типы в справочнике
+     * отображались визуально и тоже на что-то влияли»): множитель оплаты
+     * теперь берётся НАПРЯМУЮ из записи справочника «Типы времени»
+     * (`TimeType.payMultiplier`) по `entry.timeTypeId` — это работает
+     * одинаково что для встроенных, что для любых собственных типов,
+     * придуманных пользователем, а не только для 5 зашитых названий.
+     * Угадывание по названию (`inferShiftTypeFromTimeType` → `ShiftType`)
+     * остаётся только запасным вариантом — для старых записей, у которых
+     * `timeTypeId` пуст или не найден в текущем справочнике (например, тип
+     * был удалён). Если включена «Оплата сверхурочных часов»
+     * (LedgerEntry.overtimeEnabled), множитель не может быть ниже 1.5 — это
+     * ставка сверхурочных, независимо от типа смены.
      */
-    fun shiftMultiplier(entry: LedgerEntry): Double {
-        val base = when (entry.shiftType) {
-            ShiftType.DAY -> 1.0
-            ShiftType.NIGHT -> 1.4
-            ShiftType.HOLIDAY -> 2.0
-            ShiftType.OVERTIME -> 1.5
-            ShiftType.WEEKEND -> 1.5
+    fun shiftMultiplier(entry: LedgerEntry, timeTypes: List<TimeType> = emptyList()): Double {
+        val timeType = timeTypes.find { it.id == entry.timeTypeId }
+        val base = if (timeType != null) {
+            timeType.payMultiplier
+        } else {
+            when (entry.shiftType) {
+                ShiftType.DAY -> 1.0
+                ShiftType.NIGHT -> 1.4
+                ShiftType.HOLIDAY -> 2.0
+                ShiftType.OVERTIME -> 1.5
+                ShiftType.WEEKEND -> 1.5
+            }
         }
         return if (entry.overtimeEnabled) maxOf(base, 1.5) else base
     }
@@ -122,9 +139,9 @@ object PayrollCalculator {
      * используется она — это ручное переопределение расчёта, как показано на макете
      * (редактируемое поле рядом с «07ч 00м · 0,00 ₽»).
      */
-    fun shiftBaseAmount(entry: LedgerEntry, hourlyRate: Double): Double {
+    fun shiftBaseAmount(entry: LedgerEntry, hourlyRate: Double, timeTypes: List<TimeType> = emptyList()): Double {
         if (entry.amount > 0.0) return entry.amount
-        return entry.calculatePaidHours() * hourlyRate * shiftMultiplier(entry)
+        return entry.calculatePaidHours() * hourlyRate * shiftMultiplier(entry, timeTypes)
     }
 
     /** Сумма всех доплат/удержаний, привязанных к смене (с учётом условия по дням недели). */
@@ -149,8 +166,13 @@ object PayrollCalculator {
     }
 
     /** Итоговая сумма за смену: основная оплата + доплаты − удержания. */
-    fun shiftTotalAmount(entry: LedgerEntry, hourlyRate: Double, surcharges: List<Surcharge>): Double {
-        val base = shiftBaseAmount(entry, hourlyRate)
+    fun shiftTotalAmount(
+        entry: LedgerEntry,
+        hourlyRate: Double,
+        surcharges: List<Surcharge>,
+        timeTypes: List<TimeType> = emptyList()
+    ): Double {
+        val base = shiftBaseAmount(entry, hourlyRate, timeTypes)
         return base + shiftSurchargeAmount(entry, surcharges, base)
     }
 }

@@ -62,7 +62,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _taxes = MutableStateFlow<List<Tax>>(defaultTaxes())
     val taxes: StateFlow<List<Tax>> = _taxes.asStateFlow()
 
-    // ДОБАВЛЕНО (ТЗ): единый выбранный период для «Настроить период» -> «Журнал смен» -> отчёты.
+    // ========== ПЕРИОД ОТЧЁТОВ ==========
     private val _reportPeriodStart = MutableStateFlow(YearMonth.now().atDay(1))
     val reportPeriodStart: StateFlow<LocalDate> = _reportPeriodStart.asStateFlow()
 
@@ -72,6 +72,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _reportQuickPeriodId = MutableStateFlow<String?>("this_month")
     val reportQuickPeriodId: StateFlow<String?> = _reportQuickPeriodId.asStateFlow()
 
+    // ========== ФИЛЬТРЫ ЖУРНАЛА СМЕН (ДОБАВЛЕНО) ==========
+    private val _filterOrganizationId = MutableStateFlow<String?>(null)
+    val filterOrganizationId: StateFlow<String?> = _filterOrganizationId.asStateFlow()
+
+    private val _filterEmployeeId = MutableStateFlow<String?>(null)
+    val filterEmployeeId: StateFlow<String?> = _filterEmployeeId.asStateFlow()
+
+    fun setFilterOrganizationId(id: String?) {
+        _filterOrganizationId.value = id
+        persistLocalSnapshot()
+    }
+
+    fun setFilterEmployeeId(id: String?) {
+        _filterEmployeeId.value = id
+        persistLocalSnapshot()
+    }
+
+    // ========== МЕТОДЫ ПЕРИОДА ==========
     fun setReportPeriod(start: LocalDate, end: LocalDate) {
         _reportPeriodStart.value = start
         _reportPeriodEnd.value = end
@@ -102,17 +120,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ========== НАВИГАЦИЯ ПО МЕСЯЦАМ ==========
-    // ИСПРАВЛЕНО: навигация по месяцам теперь НЕ изменяет настроенный период.
-    // currentMonth используется только для отображения в шапке, а фильтрация
-    // записей всегда идет по reportPeriodStart/reportPeriodEnd.
     fun nextMonth() = setCurrentMonth(_currentMonth.value.plusMonths(1))
     fun previousMonth() = setCurrentMonth(_currentMonth.value.minusMonths(1))
     fun goToMonth(month: YearMonth) = setCurrentMonth(month)
 
     private fun setCurrentMonth(month: YearMonth) {
         _currentMonth.value = month
-        // НЕ изменяем reportPeriodStart и reportPeriodEnd
-        // НЕ сбрасываем reportQuickPeriodId
         persistLocalSnapshot()
     }
 
@@ -199,9 +212,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val entry = _entries.value.find { it.id == id } ?: return
         if (entry.type != EntryType.SHIFT) return
 
+        val rate = entry.employeeId?.let { empId -> _employees.value.find { it.id == empId }?.hourlyRate } ?: 0.0
+        val paidHours = entry.calculatePaidHours()
+        val recalculatedBase = paidHours * rate * PayrollCalculator.shiftMultiplier(entry, _timeTypes.value)
+
         val recalculated = entry.copy(
-            amount = 0.0,
-            hours = entry.calculateHours()
+            amount = recalculatedBase,
+            hours = paidHours
         )
         updateEntry(recalculated)
     }
@@ -249,7 +266,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ========== МЕТОДЫ ДЛЯ СПРАВОЧНИКОВ ==========
-
     fun addOrUpdateTimeType(timeType: TimeType) {
         val list = _timeTypes.value.toMutableList()
         val idx = list.indexOfFirst { it.id == timeType.id }
@@ -260,6 +276,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteTimeType(id: String) {
         _timeTypes.value = _timeTypes.value.filterNot { it.id == id }
+        _entries.value = _entries.value.map {
+            if (it.timeTypeId == id) it.copy(timeTypeId = null) else it
+        }
         persistLocalSnapshot()
     }
 
@@ -273,6 +292,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteExpenseCategory(id: String) {
         _expenseCategories.value = _expenseCategories.value.filterNot { it.id == id }
+        _entries.value = _entries.value.map {
+            if (it.expenseCategoryId == id) it.copy(expenseCategoryId = null) else it
+        }
         persistLocalSnapshot()
     }
 
@@ -299,7 +321,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         employeeFilter = _selectedEmployeeId.value,
         organizationFilter = _selectedOrganizationId.value,
         openingBalance = _openingBalance.value,
-        surcharges = _surcharges.value
+        surcharges = _surcharges.value,
+        timeTypes = _timeTypes.value
     )
 
     // ========== FIREBASE ==========
@@ -357,6 +380,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         put("reportPeriodStart", _reportPeriodStart.value.toString())
         put("reportPeriodEnd", _reportPeriodEnd.value.toString())
         put("reportQuickPeriodId", _reportQuickPeriodId.value ?: JSONObject.NULL)
+        // ДОБАВЛЕНО: сохранение фильтров журнала смен
+        put("filterOrganizationId", _filterOrganizationId.value ?: JSONObject.NULL)
+        put("filterEmployeeId", _filterEmployeeId.value ?: JSONObject.NULL)
     }
 
     fun createBackup(label: String? = null): File =
@@ -397,6 +423,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _reportQuickPeriodId.value = settings.optString("reportQuickPeriodId").takeIf { it.isNotBlank() }
         }
         _cloudSyncEnabled.value = settings.optBoolean("cloudSyncEnabled", false)
+        // ДОБАВЛЕНО: восстановление фильтров журнала смен
+        if (!settings.isNull("filterOrganizationId")) {
+            _filterOrganizationId.value = settings.optString("filterOrganizationId").takeIf { it.isNotBlank() }
+        }
+        if (!settings.isNull("filterEmployeeId")) {
+            _filterEmployeeId.value = settings.optString("filterEmployeeId").takeIf { it.isNotBlank() }
+        }
     }
 
     private fun persistLocalSnapshot() {

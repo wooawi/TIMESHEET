@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import java.time.LocalDate
+import java.time.LocalTime
 
 object FirebaseRepository {
 
@@ -50,12 +51,29 @@ object FirebaseRepository {
                     LedgerEntry(
                         id = doc.id,
                         date = LocalDate.parse(doc.getString("date")!!),
+                        startTime = doc.getString("startTime")?.let { LocalTime.parse(it) },
+                        endTime = doc.getString("endTime")?.let { LocalTime.parse(it) },
+                        shiftType = doc.getString("shiftType")?.let { name ->
+                            runCatching { ShiftType.valueOf(name) }.getOrNull()
+                        } ?: ShiftType.DAY,
                         type = EntryType.valueOf(doc.getString("type") ?: EntryType.SHIFT.name),
                         employeeId = doc.getString("employeeId"),
                         organizationId = doc.getString("organizationId"),
                         amount = doc.getDouble("amount") ?: 0.0,
                         hours = doc.getDouble("hours") ?: 0.0,
-                        note = doc.getString("note") ?: ""
+                        note = doc.getString("note") ?: "",
+                        expenseCategoryId = doc.getString("expenseCategoryId"),
+                        unitId = doc.getString("unitId"),
+                        quantity = doc.getDouble("quantity") ?: 0.0,
+                        surchargeIds = (doc.get("surchargeIds") as? List<*>)
+                            ?.mapNotNull { it as? String } ?: emptyList(),
+                        unpaidBreakMinutes = (doc.getLong("unpaidBreakMinutes") ?: 0L).toInt(),
+                        overtimeEnabled = doc.getBoolean("overtimeEnabled") ?: false,
+                        projectName = doc.getString("projectName") ?: "",
+                        adjustmentTypeName = doc.getString("adjustmentTypeName") ?: "",
+                        timeTypeId = doc.getString("timeTypeId"),
+                        attachments = (doc.get("attachments") as? List<*>)
+                            ?.mapNotNull { it as? String } ?: emptyList()
                     )
                 }.getOrNull()
             } ?: emptyList()
@@ -86,12 +104,25 @@ object FirebaseRepository {
         db.collection(ENTRIES).document(entry.id).set(
             mapOf(
                 "date" to entry.date.toString(),
+                "startTime" to entry.startTime?.toString(),
+                "endTime" to entry.endTime?.toString(),
+                "shiftType" to entry.shiftType.name,
                 "type" to entry.type.name,
                 "employeeId" to entry.employeeId,
                 "organizationId" to entry.organizationId,
                 "amount" to entry.amount,
                 "hours" to entry.hours,
-                "note" to entry.note
+                "note" to entry.note,
+                "expenseCategoryId" to entry.expenseCategoryId,
+                "unitId" to entry.unitId,
+                "quantity" to entry.quantity,
+                "surchargeIds" to entry.surchargeIds,
+                "unpaidBreakMinutes" to entry.unpaidBreakMinutes,
+                "overtimeEnabled" to entry.overtimeEnabled,
+                "projectName" to entry.projectName,
+                "adjustmentTypeName" to entry.adjustmentTypeName,
+                "timeTypeId" to entry.timeTypeId,
+                "attachments" to entry.attachments
             )
         ).await()
     }

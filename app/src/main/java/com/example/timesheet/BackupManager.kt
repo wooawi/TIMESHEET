@@ -105,6 +105,16 @@ object BackupManager {
                 put("projectName", it.projectName)
                 // ДОБАВЛЕНО: сохраняем реальные вложения (URI файлов/фото) записи
                 put("attachments", JSONArray(it.attachments))
+                // ИСПРАВЛЕНО (ТЗ: «ты жестко сломал мне сохранения» / «настройки
+                // изменяются сами по себе»): раньше timeTypeId и adjustmentTypeName
+                // вообще не попадали в локальный снимок (app_state.json), который
+                // пишется на КАЖДОЕ изменение и читается заново при каждом запуске
+                // приложения. Из-за этого при перезапуске/сворачивании приложения
+                // выбранный тип времени смены и тип доплаты/удержания слетали —
+                // выглядело так, будто "настройки сами меняются", хотя на самом
+                // деле терялась связь с записью справочника.
+                put("timeTypeId", it.timeTypeId ?: JSONObject.NULL)
+                put("adjustmentTypeName", it.adjustmentTypeName)
             })
         }
         root.put("entries", entries)

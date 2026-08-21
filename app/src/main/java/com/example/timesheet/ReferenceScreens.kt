@@ -27,8 +27,10 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -48,6 +50,7 @@ import com.example.timesheet.data.ExpenseCategory
 import com.example.timesheet.data.Tax
 import com.example.timesheet.data.TimeType
 import com.example.timesheet.data.UnitOfMeasure
+import com.example.timesheet.data.moneyInputFilter
 
 // ========== ЭКРАН ТИПОВ ВРЕМЕНИ ==========
 @OptIn(ExperimentalMaterial3Api::class)
@@ -101,6 +104,11 @@ fun TimeTypesScreen(
     }
 }
 
+/** Компактное отображение множителя оплаты типа времени (1.0 -> "1", 1.5 -> "1.5"). */
+private fun formatMultiplier(value: Double): String =
+    if (value == value.toLong().toDouble()) value.toLong().toString()
+    else value.toString().trimEnd('0').trimEnd('.')
+
 @Composable
 fun TimeTypeItem(
     timeType: TimeType,
@@ -152,7 +160,31 @@ fun TimeTypeItem(
                     )
                 }
             }
-            Row {
+            // ДОБАВЛЕНО (ТЗ: «пусть новые пользовательские типы в справочнике
+            // отображались визуально и тоже на что-то влияли»): множитель
+            // оплаты раньше нигде не был виден в самом справочнике — было
+            // непонятно, что тип вообще на что-то влияет и на сколько именно.
+            // Теперь он показан прямо в списке рядом с кнопками редактирования,
+            // тем же цветом, что и метка типа — это то самое число, которое
+            // PayrollCalculator.shiftMultiplier() берёт напрямую из этой записи.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    color = Color(android.graphics.Color.parseColor(
+                        timeType.color.ifEmpty { "#45B7D1" }
+                    )).copy(alpha = 0.15f),
+                    shape = MaterialTheme.shapes.small
+                ) {
+                    Text(
+                        text = "× ${formatMultiplier(timeType.payMultiplier)}",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(android.graphics.Color.parseColor(
+                            timeType.color.ifEmpty { "#45B7D1" }
+                        )),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.size(4.dp))
                 IconButton(onClick = onEdit) {
                     Icon(Icons.Filled.Edit, contentDescription = "Редактировать", modifier = Modifier.size(20.dp))
                 }
@@ -173,6 +205,14 @@ fun TimeTypeEditDialog(
     var name by remember(initial) { mutableStateOf(initial.name) }
     var code by remember(initial) { mutableStateOf(initial.code) }
     var selectedColor by remember(initial) { mutableStateOf(initial.color) }
+    // ДОБАВЛЕНО (ТЗ: «пусть новые пользовательские типы в справочнике
+    // отображались визуально и тоже на что-то влияли»): раньше у этого диалога
+    // вообще не было поля для payMultiplier — само значение в модели уже было
+    // (см. Models.kt), но пользователь никак не мог его задать для СВОЕГО типа,
+    // так что "на что-то влияли" не выполнялось для новых типов. Текстом, а не
+    // слайдером — множитель редко бывает "круглым" (1.4, 1.5, 2.0...), и
+    // человеку проще ввести точное число, чем попасть в него ползунком.
+    var multiplierText by remember(initial) { mutableStateOf(formatMultiplier(initial.payMultiplier)) }
 
     val colors = listOf(
         "#FF6B6B", "#FF9F43", "#FECA57", "#48DBFB", "#0ABDE3",
@@ -239,13 +279,35 @@ fun TimeTypeEditDialog(
                         }
                     }
                 }
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = multiplierText,
+                    onValueChange = { multiplierText = moneyInputFilter(it) },
+                    label = { Text("Множитель оплаты (например, 1.5)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text = "Во сколько раз умножается ставка сотрудника для смен этого типа",
+                    fontSize = 11.sp,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
             }
         },
         confirmButton = {
             TextButton(
                 onClick = {
-                    if (name.isNotBlank() && code.isNotBlank()) {
-                        onSave(initial.copy(name = name, code = code, color = selectedColor))
+                    val multiplier = multiplierText.replace(',', '.').toDoubleOrNull()
+                    if (name.isNotBlank() && code.isNotBlank() && multiplier != null && multiplier > 0.0) {
+                        onSave(
+                            initial.copy(
+                                name = name,
+                                code = code,
+                                color = selectedColor,
+                                payMultiplier = multiplier
+                            )
+                        )
                     }
                 }
             ) {
@@ -573,7 +635,11 @@ fun TaxEditDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = rateText,
-                    onValueChange = { rateText = it },
+                    // ИСПРАВЛЕНО (ТЗ: «в полях про деньги можно ввести только цифры»):
+                    // раньше здесь можно было ввести любые символы, включая буквы —
+                    // единственная защита была неявная (toDoubleOrNull() ?: 0.0 при
+                    // сохранении), из-за чего в самом поле буквы всё равно печатались.
+                    onValueChange = { rateText = moneyInputFilter(it) },
                     label = { Text("Ставка, %") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()

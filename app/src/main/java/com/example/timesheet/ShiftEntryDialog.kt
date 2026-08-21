@@ -11,9 +11,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -47,6 +50,13 @@ import com.example.timesheet.data.Organization
 import com.example.timesheet.data.PayrollCalculator
 import com.example.timesheet.data.ShiftType
 import com.example.timesheet.data.Surcharge
+import com.example.timesheet.data.TimeType
+import com.example.timesheet.data.inferShiftTypeFromTimeType
+import com.example.timesheet.data.shiftTypeTimeTypeId
+import com.example.timesheet.data.moneyInputFilter
+import com.example.timesheet.data.timeRangesOverlap
+import com.example.timesheet.data.dateRangeDays
+import com.example.timesheet.data.EntryType
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -62,11 +72,31 @@ private fun shiftTypeLabel(type: ShiftType): String = when (type) {
 }
 
 /**
- * Вспомогательная функция для фильтрации ввода в денежных полях
+ * ДОБАВЛЕНО (ТЗ: «справочники должны быть напрямую связаны со всем проектом,
+ * то есть менять цвет при выборе другого типа смены»): цвет теперь берётся из
+ * справочника «Типы времени» (см. `shiftTypeTimeTypeId`) — тот же цвет, что
+ * потом используется в журнале записей. Если пользователь поменяет цвет в
+ * справочнике, здесь он тоже сразу поменяется.
  */
-private fun moneyInputFilter(input: String): String {
-    return input.filter { c -> c.isDigit() || c == '.' || c == ',' }
+private fun colorForShiftType(type: ShiftType, timeTypes: List<TimeType>): Color {
+    val timeType = timeTypes.find { it.id == shiftTypeTimeTypeId(type) }
+    if (timeType != null && timeType.color.isNotBlank()) {
+        try {
+            return Color(android.graphics.Color.parseColor(timeType.color))
+        } catch (e: Exception) {
+            // падаем на стандартный цвет ниже
+        }
+    }
+    return when (type) {
+        ShiftType.DAY -> Color(0xFF4CAF50)
+        ShiftType.NIGHT -> Color(0xFF2196F3)
+        ShiftType.HOLIDAY -> Color(0xFFFF9800)
+        ShiftType.OVERTIME -> Color(0xFF9C27B0)
+        ShiftType.WEEKEND -> Color(0xFFF44336)
+    }
 }
+
+// ИСПРАВЛЕНО: теперь общий moneyInputFilter из com.example.timesheet.data — одинаковая логика во всех диалогах.
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,20 +104,58 @@ fun ShiftEntryDialog(
     employees: List<Employee>,
     organizations: List<Organization>,
     surcharges: List<Surcharge>,
+    // ДОБАВЛЕНО (ТЗ: связь со справочниками): нужен для цвета типа смены.
+    timeTypes: List<TimeType> = emptyList(),
     preselectedEmployeeId: String?,
     preselectedOrganizationId: String?,
     initialEntry: LedgerEntry? = null,
     initialDate: LocalDate = LocalDate.now(),
     projectSuggestions: List<String> = emptyList(),
+    // ДОБАВЛЕНО (ТЗ: «сохранения стали накладываться друг на друга»): весь
+    // текущий журнал нужен, чтобы по-настоящему предупредить пользователя,
+    // если новая смена пересекается по времени с уже существующей сменой
+    // этого же сотрудника в этот же день — раньше ничего не предупреждало,
+    // и записи молча накладывались друг на друга.
+    existingEntries: List<LedgerEntry> = emptyList(),
     onClose: () -> Unit,
     onConfirm: (LedgerEntry) -> Unit,
     onDelete: ((String) -> Unit)? = null
 ) {
     var activeTab by remember { mutableStateOf(0) }
 
+    // ИСПРАВЛЕНО (ТЗ: «сохранения стали накладываться друг на друга»): id
+    // записи раньше генерировался ЗАНОВО при каждом вызове buildDraftEntry()
+    // (`id = initialEntry?.id ?: UUID.randomUUID().toString()` внутри функции,
+    // а не в remember) — а buildDraftEntry() вызывается на каждой
+    // рекомпозиции для расчёта суммы в шапке. У одного и того же открытого
+    // диалога добавления смены на каждой перерисовке получался НОВЫЙ
+    // случайный id. Теперь id одной открытой формы стабилен на всё время её
+    // жизни — один диалог добавления всегда сохраняет ровно одну (или, при
+    // выборе диапазона дат, N сгенерированных заранее) запись, а не рискует
+    // расползтись на несколько разных id из-за случайной рекомпозиции.
+    val stableEntryId = remember { initialEntry?.id ?: java.util.UUID.randomUUID().toString() }
+
+    // ДОБАВЛЕНО (ТЗ: «чтобы человек мог добавить в смены... промежуток дат»):
+    // диапазон дат доступен только при ДОБАВЛЕНИИ новой смены — у уже
+    // существующей записи один-единственный день, его меняют через обычный
+    // выбор одной даты. Признак режима редактирования — переданный onDelete
+    // (а не initialEntry == null: экран добавления передаёт сюда «болванку»
+    // LedgerEntry() с предвыбранными доплатами из шаблона, так что сам по
+    // себе initialEntry не отличает добавление от редактирования).
+    val isAddMode = onDelete == null
+    var rangeEnabled by remember { mutableStateOf(false) }
+
+    // ДОБАВЛЕНО: защита от повторного нажатия «Сохранить» (двойной тап) —
+    // именно она и была одной из причин появления «накладывающихся друг на
+    // друга» дублей: ничего не мешало вызвать onConfirm дважды до того, как
+    // диалог успевал закрыться.
+    var isSaving by remember { mutableStateOf(false) }
+
     var date by remember {
         mutableStateOf(initialEntry?.date ?: initialDate)
     }
+
+    var rangeEndDate by remember { mutableStateOf(initialEntry?.date ?: initialDate) }
 
     var startTime by remember {
         mutableStateOf(initialEntry?.startTime ?: LocalTime.of(8, 0))
@@ -97,9 +165,22 @@ fun ShiftEntryDialog(
         mutableStateOf(initialEntry?.endTime ?: LocalTime.of(17, 0))
     }
 
-    var shiftType by remember {
-        mutableStateOf(initialEntry?.shiftType ?: ShiftType.DAY)
+    // ИСПРАВЛЕНО (ТЗ: «единая связь со всеми вкладками» / «удаление и добавление
+    // типа в справочнике должно отражаться в смене»): раньше здесь был отдельный
+    // enum ShiftType, никак не связанный со справочником. Теперь источник
+    // правды — сам справочник timeTypes: храним id выбранной записи.
+    var timeTypeId by remember {
+        mutableStateOf(
+            initialEntry?.timeTypeId
+                ?: timeTypes.find { it.id == shiftTypeTimeTypeId(initialEntry?.shiftType ?: ShiftType.DAY) }?.id
+                ?: timeTypes.firstOrNull()?.id
+        )
     }
+    val selectedTimeType = timeTypes.find { it.id == timeTypeId }
+    // shiftType теперь не выбирается вручную — подбирается автоматически по
+    // названию выбранного в справочнике типа (нужен только для формулы
+    // надбавки к оплате в PayrollCalculator).
+    val shiftType = inferShiftTypeFromTimeType(selectedTimeType)
 
     var employeeId by remember {
         mutableStateOf(initialEntry?.employeeId ?: preselectedEmployeeId)
@@ -183,8 +264,7 @@ fun ShiftEntryDialog(
                 .toDoubleOrNull() ?: 0.0
 
         return LedgerEntry(
-            id = initialEntry?.id
-                ?: java.util.UUID.randomUUID().toString(),
+            id = stableEntryId,
 
             date = date,
 
@@ -193,6 +273,8 @@ fun ShiftEntryDialog(
             endTime = endTime,
 
             shiftType = shiftType,
+
+            timeTypeId = timeTypeId,
 
             employeeId = employeeId,
 
@@ -220,15 +302,37 @@ fun ShiftEntryDialog(
     val baseAmount =
         PayrollCalculator.shiftBaseAmount(
             draft,
-            hourlyRate
+            hourlyRate,
+            timeTypes
         )
 
     val totalAmount =
         PayrollCalculator.shiftTotalAmount(
             draft,
             hourlyRate,
-            surcharges
+            surcharges,
+            timeTypes
         )
+
+    // ДОБАВЛЕНО (ТЗ: «сохранения стали накладываться друг на друга»): настоящая
+    // проверка — пересекается ли эта смена по времени с уже существующей
+    // сменой ТОГО ЖЕ сотрудника в ТОТ ЖЕ день. Раньше пользователь никак не
+    // узнавал об этом, пока не открывал журнал и не видел два наложившихся
+    // друг на друга блока. Проверяем каждый день диапазона, если он включён.
+    val overlapDates: List<LocalDate> = run {
+        val daysToCheck = if (rangeEnabled && isAddMode) dateRangeDays(date, rangeEndDate) else listOf(date)
+        daysToCheck.filter { checkedDate ->
+            existingEntries.any { other ->
+                other.id != stableEntryId &&
+                        other.type == EntryType.SHIFT &&
+                        other.employeeId == employeeId &&
+                        employeeId != null &&
+                        other.date == checkedDate &&
+                        timeRangesOverlap(startTime, endTime, other.startTime, other.endTime)
+            }
+        }
+    }
+    val hasOverlap = overlapDates.isNotEmpty()
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -268,10 +372,27 @@ fun ShiftEntryDialog(
 
                     actions = {
                         IconButton(
+                            enabled = !isSaving,
                             onClick = {
-                                onConfirm(
-                                    buildDraftEntry()
-                                )
+                                // ИСПРАВЛЕНО (ТЗ: «сохранения стали накладываться друг на
+                                // друга»): защита от двойного тапа + при включённом
+                                // диапазоне дат создаём отдельную запись (со своим
+                                // сгенерированным id) на каждый день диапазона, а не
+                                // молча теряем/дублируем одну и ту же.
+                                if (isSaving) return@IconButton
+                                isSaving = true
+                                if (rangeEnabled && isAddMode) {
+                                    dateRangeDays(date, rangeEndDate).forEach { d ->
+                                        onConfirm(
+                                            buildDraftEntry().copy(
+                                                id = java.util.UUID.randomUUID().toString(),
+                                                date = d
+                                            )
+                                        )
+                                    }
+                                } else {
+                                    onConfirm(buildDraftEntry())
+                                }
                             }
                         ) {
                             Icon(
@@ -317,10 +438,19 @@ fun ShiftEntryDialog(
 
         if (activeTab == 0) {
 
+            // ИСПРАВЛЕНО (ТЗ: «нет возможности листать вниз» / «не работает кнопка
+            // добавления на несколько дней»): раньше это был Column(fillMaxSize())
+            // БЕЗ прокрутки — как только контента стало больше (после добавления
+            // блока диапазона дат и предупреждения о пересечении), всё, что не
+            // помещалось на экран (включая сам переключатель диапазона дат и всё,
+            // что ниже — доплаты, комментарий, кнопку удаления), было физически
+            // не видно и недостижимо. Кнопка "не работала" не потому что была
+            // сломана логика, а потому что до неё нельзя было докрутить.
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
+                    .verticalScroll(rememberScrollState())
                     .padding(16.dp)
             ) {
 
@@ -425,13 +555,29 @@ fun ShiftEntryDialog(
                 ) {
 
                     OutlinedTextField(
-                        value = shiftTypeLabel(shiftType),
+                        value = selectedTimeType?.name ?: "Выберите тип",
                         onValueChange = {},
                         label = {
                             Text("Тип смены")
                         },
                         readOnly = true,
                         modifier = Modifier.fillMaxWidth(),
+
+                        leadingIcon = {
+                            // ИСПРАВЛЕНО (ТЗ: цвет должен меняться при выборе другого типа
+                            // смены — теперь берётся напрямую из выбранной записи справочника).
+                            val dotColor = selectedTimeType?.color?.let {
+                                runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull()
+                            } ?: Color.LightGray
+                            Box(
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .background(
+                                        color = dotColor,
+                                        shape = androidx.compose.foundation.shape.CircleShape
+                                    )
+                            )
+                        },
 
                         trailingIcon = {
                             TextButton(
@@ -450,18 +596,43 @@ fun ShiftEntryDialog(
                             shiftTypeMenuOpen = false
                         }
                     ) {
-
-                        ShiftType.values().forEach { type ->
+                        // ИСПРАВЛЕНО (ТЗ: «сделать нормальную единую связь со всеми
+                        // вкладками, у меня же есть база данных» / «почему я могу
+                        // удалить из справочника дневную смену, а в самой смене она
+                        // останется» / «почему когда я добавляю сверхурочную смену она
+                        // всё равно отображается как дневная»): раньше список был
+                        // жёстко зашит (`ShiftType.values()`) и никак не зависел от
+                        // справочника. Теперь список — это сам справочник `timeTypes`:
+                        // что удалено в справочнике, пропадает и здесь; что добавлено —
+                        // сразу становится доступным для выбора.
+                        if (timeTypes.isEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text("Справочник «Типы времени» пуст") },
+                                onClick = { shiftTypeMenuOpen = false }
+                            )
+                        }
+                        timeTypes.forEach { type ->
 
                             DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        shiftTypeLabel(type)
+                                leadingIcon = {
+                                    val dotColor = runCatching {
+                                        Color(android.graphics.Color.parseColor(type.color))
+                                    }.getOrNull() ?: Color.LightGray
+                                    Box(
+                                        modifier = Modifier
+                                            .size(14.dp)
+                                            .background(
+                                                color = dotColor,
+                                                shape = androidx.compose.foundation.shape.CircleShape
+                                            )
                                     )
+                                },
+                                text = {
+                                    Text(type.name)
                                 },
 
                                 onClick = {
-                                    shiftType = type
+                                    timeTypeId = type.id
                                     shiftTypeMenuOpen = false
                                 }
                             )
@@ -572,6 +743,32 @@ fun ShiftEntryDialog(
                                 Text("🕐")
                             }
                         }
+                    )
+                }
+
+                if (isAddMode) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    DateRangeToggle(
+                        rangeEnabled = rangeEnabled,
+                        onRangeEnabledChange = {
+                            rangeEnabled = it
+                            if (it && rangeEndDate.isBefore(date)) rangeEndDate = date
+                        },
+                        startDate = date,
+                        endDate = rangeEndDate,
+                        onStartDateChange = { date = it },
+                        onEndDateChange = { rangeEndDate = it },
+                        dateFormatter = dateFormatter
+                    )
+                }
+
+                if (hasOverlap) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "⚠ Пересекается по времени с другой сменой этого сотрудника" +
+                                if (overlapDates.size > 1) " (${overlapDates.size} дн.)" else " в этот день",
+                        fontSize = 12.sp,
+                        color = Color(0xFFE65100)
                     )
                 }
 

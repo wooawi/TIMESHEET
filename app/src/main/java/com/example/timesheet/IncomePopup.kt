@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.timesheet.data.EntryType
 import com.example.timesheet.data.PayrollBreakdown
+import com.example.timesheet.data.moneySignedInputFilter
 
 @Composable
 fun IncomeBar(accrued: Double, onClick: () -> Unit) {
@@ -102,7 +103,10 @@ fun IncomeBreakdownDialog(
                 if (editingBalance) {
                     OutlinedTextField(
                         value = balanceText,
-                        onValueChange = { balanceText = it },
+                        // ИСПРАВЛЕНО (ТЗ: «в полях про деньги можно ввести только цифры»):
+                        // остаток может быть отрицательным, поэтому разрешаем один минус
+                        // в начале строки плюс цифры и разделитель дробной части.
+                        onValueChange = { balanceText = moneySignedInputFilter(it) },
                         label = { Text("Остаток на начало") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()

@@ -32,6 +32,127 @@ enum class ShiftType {
     WEEKEND
 }
 
+/**
+ * ИСПРАВЛЕНО (ТЗ: «сделать нормальную единую связь со всеми вкладками, у меня же
+ * есть база данных», «почему я могу удалить из справочника дневную смену, а в
+ * самой смене она останется», «почему когда я добавляю сверхурочную смену она
+ * всё равно отображается как дневная»):
+ *
+ * Раньше выбор типа смены в диалоге «Смена» был жёстко зашитым списком из 5
+ * значений enum `ShiftType` — он вообще не был связан со справочником «Типы
+ * времени» (`AppViewModel.timeTypes`). Поэтому:
+ *  - удаление записи из справочника никак не влияло на диалог смены (список
+ *    оставался прежним, «зашитым» в код);
+ *  - добавление своего типа в справочник никак не появлялось в диалоге смены
+ *    (там просто не было механизма его показать);
+ *  - при сохранении реально писался только фиксированный `ShiftType`, поэтому
+ *    название и цвет в журнале всегда откатывались к одному из 5 стандартных.
+ *
+ * Теперь диалог «Смена» выбирает тип смены НАПРЯМУЮ из справочника
+ * `timeTypes` (см. `ShiftEntryDialog`), а выбранный `TimeType.id` пишется в
+ * `LedgerEntry.timeTypeId` — это и есть единый источник правды, общий для
+ * диалога смены, журнала и справочника. Старый enum `ShiftType` оставлен
+ * только для расчёта надбавки к оплате (`PayrollCalculator`, где давно
+ * завязана формула множителей 1.0/1.4/1.5/2.0) — он теперь не выбирается
+ * пользователем напрямую, а автоматически подбирается по названию выбранного
+ * типа из справочника функцией `inferShiftTypeFromTimeType`.
+ */
+fun inferShiftTypeFromTimeType(timeType: TimeType?): ShiftType {
+    val name = timeType?.name?.lowercase() ?: return ShiftType.DAY
+    return when {
+        "сверхуроч" in name -> ShiftType.OVERTIME
+        "ноч" in name -> ShiftType.NIGHT
+        "выходн" in name || "празд" in name -> ShiftType.HOLIDAY
+        "командиров" in name -> ShiftType.OVERTIME
+        else -> ShiftType.DAY
+    }
+}
+
+/**
+ * Фолбэк только для СТАРЫХ записей, у которых ещё нет `timeTypeId` (созданы до
+ * этого исправления) — чтобы у них тоже был хоть какой-то цвет/название из
+ * справочника, пока их не пересохранят через диалог «Смена».
+ */
+fun shiftTypeTimeTypeId(shiftType: ShiftType): String = when (shiftType) {
+    ShiftType.DAY -> "tt_day"
+    ShiftType.NIGHT -> "tt_night"
+    ShiftType.HOLIDAY -> "tt_holiday"
+    ShiftType.OVERTIME -> "tt_business_trip"
+    ShiftType.WEEKEND -> "tt_unpaid_vacation"
+}
+
+/**
+ * ИСПРАВЛЕНО (ТЗ: «почему когда я добавляю сверхурочную смену она всё равно
+ * отображается как дневная»): «сверхурочная» — это НЕ отдельный пункт
+ * справочника (в списке типов времени по умолчанию такого нет вообще), это
+ * отдельная галочка «Оплата сверхурочных часов» (`overtimeEnabled`) в диалоге
+ * «Смена». Раньше она влияла ТОЛЬКО на множитель в PayrollCalculator и нигде
+ * не отображалась — смена с типом «Дневная смена» + включённой галочкой
+ * сверхурочных везде так и продолжала называться и выглядеть как обычная
+ * «Дневная смена». Теперь везде, где показывается название типа смены,
+ * добавляется явная пометка.
+ */
+fun displayShiftLabel(baseName: String, overtimeEnabled: Boolean): String =
+    if (overtimeEnabled) "$baseName · Сверхурочно" else baseName
+
+/**
+ * ИСПРАВЛЕНО (ТЗ: «в полях про деньги можно ввести только цифры»): общий
+ * фильтр ввода для ВСЕХ денежных/числовых полей проекта — один и тот же код
+ * вместо нескольких разных копий (`moneyInputFilter` в ShiftEntryDialog.kt,
+ * FullScreenEntryDialogs.kt, `moneyInputFilterLegacy` в EntryDialogs.kt),
+ * которые могли незаметно разойтись между собой.
+ */
+fun moneyInputFilter(input: String): String =
+    input.filter { c -> c.isDigit() || c == '.' || c == ',' }
+
+/**
+ * То же самое, но для полей, где допустим ведущий минус (например, «Остаток
+ * на начало периода» может быть отрицательным).
+ */
+fun moneySignedInputFilter(input: String): String {
+    val negative = input.startsWith("-")
+    val digitsOnly = input.filter { c -> c.isDigit() || c == '.' || c == ',' }
+    return if (negative) "-$digitsOnly" else digitsOnly
+}
+
+/**
+ * ДОБАВЛЕНО (ТЗ: «сохранения стали накладываться друг на друга»): настоящая
+ * проверка пересечения по времени двух смен в пределах одного дня (с учётом
+ * ночных смен, переходящих через полночь — тот же способ сравнения, что и в
+ * `LedgerEntry.calculateHours()`). Раньше ничего не предупреждало пользователя,
+ * что новая смена по времени накладывается на уже существующую смену того же
+ * сотрудника в тот же день — теперь диалог «Смена» показывает предупреждение,
+ * если это произошло, вместо того чтобы дать записям молча наложиться друг на
+ * друга без единого сигнала пользователю.
+ */
+fun timeRangesOverlap(
+    aStart: LocalTime?,
+    aEnd: LocalTime?,
+    bStart: LocalTime?,
+    bEnd: LocalTime?
+): Boolean {
+    if (aStart == null || aEnd == null || bStart == null || bEnd == null) return false
+    val aStartSec = aStart.toSecondOfDay()
+    val aEndSecRaw = aEnd.toSecondOfDay()
+    val aEndSec = if (aEndSecRaw > aStartSec) aEndSecRaw else aEndSecRaw + 86400
+    val bStartSec = bStart.toSecondOfDay()
+    val bEndSecRaw = bEnd.toSecondOfDay()
+    val bEndSec = if (bEndSecRaw > bStartSec) bEndSecRaw else bEndSecRaw + 86400
+    return aStartSec < bEndSec && bStartSec < aEndSec
+}
+
+/**
+ * ДОБАВЛЕНО (ТЗ: «чтобы человек мог добавить в смены и остальные вкладки
+ * промежуток дат, а сейчас можно выбрать только одно число»): общий способ
+ * получить список дат периода [start; end] включительно, используемый всеми
+ * диалогами добавления записи для создания одной записи на каждый день
+ * выбранного диапазона.
+ */
+fun dateRangeDays(start: LocalDate, end: LocalDate): List<LocalDate> {
+    if (end.isBefore(start)) return listOf(start)
+    return generateSequence(start) { d -> if (d.isBefore(end)) d.plusDays(1) else null }.toList()
+}
+
 data class LedgerEntry(
     val id: String = UUID.randomUUID().toString(),
     val date: LocalDate = LocalDate.now(),
@@ -83,12 +204,29 @@ data class LedgerEntry(
 // ========== МОДЕЛИ ДЛЯ СПРАВОЧНИКОВ ==========
 
 // 1. Типы времени
+/**
+ * ДОБАВЛЕНО (ТЗ: «пусть новые пользовательские типы в справочнике отображались
+ * визуально и тоже на что-то влияли»): раньше у типа времени не было
+ * собственного множителя оплаты — расчёт зарплаты (`PayrollCalculator`)
+ * определял множитель, УГАДЫВАЯ его по русским словам в названии типа
+ * (`inferShiftTypeFromTimeType`: «сверхуроч», «ноч», «выходн»/«празд»,
+ * «командиров»). Из-за этого любой СВОЙ тип, придуманный пользователем в
+ * справочнике («Смена А», «Дежурство» и т.п.), никогда не подбирал нужный
+ * множитель — деньги считались так, будто это всегда обычная дневная смена,
+ * что бы пользователь ни ввёл в название. Теперь множитель — обычное поле
+ * самого типа времени (по умолчанию ×1.0), пользователь редактирует его прямо
+ * в справочнике, и `PayrollCalculator` берёт именно это значение напрямую —
+ * никакого угадывания по словам для новых/пользовательских типов. Угадывание
+ * по названию оставлено только как запасной вариант для СТАРЫХ записей,
+ * созданных до этого исправления и не имеющих `timeTypeId` вовсе.
+ */
 data class TimeType(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "",
     val code: String = "",
     val color: String = "#45B7D1",
-    val isBuiltIn: Boolean = false
+    val isBuiltIn: Boolean = false,
+    val payMultiplier: Double = 1.0
 )
 
 // 2. Категории расходов
@@ -130,14 +268,14 @@ fun defaultUnits(): List<UnitOfMeasure> = listOf(
 // записи (сама фабрика), удаление/редактирование этим не ограничено —
 // экраны и так уже поддерживают и то, и другое.
 fun defaultTimeTypes(): List<TimeType> = listOf(
-    TimeType(id = "tt_sick", name = "Больничный", code = "Б", color = "#8395A7", isBuiltIn = true),
-    TimeType(id = "tt_evening", name = "Вечерняя смена", code = "В", color = "#48DBFB", isBuiltIn = true),
-    TimeType(id = "tt_holiday", name = "Выходные и нерабочие праздничные", code = "ВП", color = "#FF6FB7", isBuiltIn = true),
-    TimeType(id = "tt_day", name = "Дневная смена", code = "Д", color = "#5CA02F", isBuiltIn = true),
-    TimeType(id = "tt_unpaid_vacation", name = "Неоплачиваемый отпуск", code = "ДО", color = "#10AC84", isBuiltIn = true),
-    TimeType(id = "tt_night", name = "Ночная смена", code = "Н", color = "#8395A7", isBuiltIn = true),
-    TimeType(id = "tt_paid_vacation", name = "Оплачиваемый отпуск", code = "ОТ", color = "#5F27CD", isBuiltIn = true),
-    TimeType(id = "tt_business_trip", name = "Служебная командировка", code = "К", color = "#FF9F43", isBuiltIn = true)
+    TimeType(id = "tt_sick", name = "Больничный", code = "Б", color = "#8395A7", isBuiltIn = true, payMultiplier = 1.0),
+    TimeType(id = "tt_evening", name = "Вечерняя смена", code = "В", color = "#48DBFB", isBuiltIn = true, payMultiplier = 1.0),
+    TimeType(id = "tt_holiday", name = "Выходные и нерабочие праздничные", code = "ВП", color = "#FF6FB7", isBuiltIn = true, payMultiplier = 2.0),
+    TimeType(id = "tt_day", name = "Дневная смена", code = "Д", color = "#5CA02F", isBuiltIn = true, payMultiplier = 1.0),
+    TimeType(id = "tt_unpaid_vacation", name = "Неоплачиваемый отпуск", code = "ДО", color = "#10AC84", isBuiltIn = true, payMultiplier = 1.0),
+    TimeType(id = "tt_night", name = "Ночная смена", code = "Н", color = "#8395A7", isBuiltIn = true, payMultiplier = 1.4),
+    TimeType(id = "tt_paid_vacation", name = "Оплачиваемый отпуск", code = "ОТ", color = "#5F27CD", isBuiltIn = true, payMultiplier = 1.0),
+    TimeType(id = "tt_business_trip", name = "Служебная командировка", code = "К", color = "#FF9F43", isBuiltIn = true, payMultiplier = 1.5)
 )
 
 fun defaultExpenseCategories(): List<ExpenseCategory> = listOf(

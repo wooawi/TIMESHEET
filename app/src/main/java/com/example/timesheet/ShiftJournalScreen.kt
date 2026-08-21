@@ -57,6 +57,11 @@ fun ShiftJournalScreen(
     employees: List<Employee>,
     organizations: List<Organization>,
     timeTypes: List<TimeType>, // ДОБАВЛЕНО: справочник типов времени
+    // ДОБАВЛЕНО (ТЗ: справочники должны быть связаны со всем проектом): нужны, чтобы
+    // в журнале смен показывались настоящие названия категории расхода и единицы
+    // измерения, а не их id.
+    expenseCategories: List<com.example.timesheet.data.ExpenseCategory> = emptyList(),
+    units: List<com.example.timesheet.data.UnitOfMeasure> = emptyList(),
     periodStart: LocalDate,
     periodEnd: LocalDate,
     filterOrganizationId: String?,
@@ -210,12 +215,21 @@ fun ShiftJournalScreen(
                         .fillMaxSize()
                         .padding(horizontal = 16.dp)
                 ) {
-                    items(filteredEntries.sortedByDescending { it.date }, key = { it.id }) { entry ->
+                    items(
+                        // ИСПРАВЛЕНО (ТЗ: «выбор времени во всех вкладках должно влиять на
+                        // записи в главном меню»): добавлена сортировка по времени внутри дня.
+                        filteredEntries.sortedWith(
+                            compareByDescending<LedgerEntry> { it.date }
+                                .thenByDescending { it.startTime ?: java.time.LocalTime.MIN }
+                        ),
+                        key = { it.id }) { entry ->
                         JournalEntryItem(
                             entry = entry,
                             employeeName = employees.find { it.id == entry.employeeId }?.name,
                             organizationName = organizations.find { it.id == entry.organizationId }?.name,
                             timeTypes = timeTypes, // Передаем справочник типов времени
+                            expenseCategories = expenseCategories,
+                            units = units,
                             onEdit = { onEditEntry(it) },
                             onDelete = { onDeleteEntry(it) },
                             onRecalculate = { onRecalculateEntry(it) },

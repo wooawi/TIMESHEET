@@ -9,6 +9,7 @@ package com.example.timesheet.ui
 // «ПРЕДВ. ПРОСМОТР» (открывает настоящий PDF через ACTION_VIEW) и
 // «ОТПРАВИТЬ» (шарит xls/pdf, как и раньше в отчётах).
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
@@ -59,6 +61,9 @@ import com.example.timesheet.data.LedgerEntry
 import com.example.timesheet.data.PayrollBreakdown
 import com.example.timesheet.data.ShiftType
 import com.example.timesheet.data.TimeType
+import com.example.timesheet.data.shiftTypeTimeTypeId
+import com.example.timesheet.data.displayShiftLabel
+import com.example.timesheet.data.moneySignedInputFilter
 import com.example.timesheet.util.ReportExport
 import java.time.LocalDate
 import java.time.YearMonth
@@ -69,13 +74,20 @@ import java.util.Locale
 private val IncomeGreen = Color(0xFF5CA02F)
 private val IncomeAccent = Color(0xFFFF5722)
 
-private fun shiftTypeShortName(type: ShiftType): String = when (type) {
-    ShiftType.DAY -> "Дневная"
-    ShiftType.NIGHT -> "Ночная"
-    ShiftType.HOLIDAY -> "Праздничная"
-    ShiftType.OVERTIME -> "Сверхурочная"
-    ShiftType.WEEKEND -> "Выходной день"
-}
+// ИСПРАВЛЕНО (ТЗ: «почему когда я добавляю сверхурочную смену она всё равно
+// отображается как дневная»): раньше вкладка «Доход» определяла название и
+// цвет смены не по выбранному в справочнике типу (`entry.timeTypeId`), а
+// заново «угадывала» их по старому пятизначному enum `ShiftType` через
+// жёстко зашитые списки `shiftTypeShortName`/`shiftTypeSummaryLabel`. Любой
+// тип, не попавший в эти 5 вариантов (а также любой пользовательский тип из
+// справочника), молча схлопывался в «Дневная смена». Теперь, как и в журнале
+// смен (`JournalEntryItem.kt`), название и цвет берутся напрямую из
+// справочника `timeTypes` по `entry.timeTypeId` — единый источник правды.
+// Резервный вариант по `shiftType` остаётся только для самых старых записей,
+// у которых `timeTypeId` ещё не был проставлен.
+private fun resolvedTimeType(entry: LedgerEntry, timeTypes: List<TimeType>): TimeType? =
+    timeTypes.find { it.id == entry.timeTypeId }
+        ?: timeTypes.find { it.id == shiftTypeTimeTypeId(entry.shiftType) }
 
 private fun shiftTypeSummaryLabel(type: ShiftType): String = when (type) {
     ShiftType.DAY -> "Дневная смена"
@@ -85,8 +97,21 @@ private fun shiftTypeSummaryLabel(type: ShiftType): String = when (type) {
     ShiftType.WEEKEND -> "Смена в выходной"
 }
 
+private fun shiftLabelFor(entry: LedgerEntry, timeTypes: List<TimeType>): String =
+    // ИСПРАВЛЕНО (ТЗ: «почему когда я добавляю сверхурочную смену она всё равно
+    // отображается как дневная»): «сверхурочная» — это галочка `overtimeEnabled`
+    // в диалоге «Смена», а не отдельный тип из справочника. Раньше она нигде не
+    // отображалась и здесь тоже — теперь label явно её показывает.
+    displayShiftLabel(
+        resolvedTimeType(entry, timeTypes)?.name ?: shiftTypeSummaryLabel(entry.shiftType),
+        entry.overtimeEnabled
+    )
+
 private fun shiftColorFor(entry: LedgerEntry, timeTypes: List<TimeType>): Color {
-    val timeType = timeTypes.find { it.name == shiftTypeShortName(entry.shiftType) }
+    // Включённые сверхурочные всегда выделяются фиолетовым, даже если тип из
+    // справочника — «Дневная смена».
+    if (entry.overtimeEnabled) return Color(0xFF9C27B0)
+    val timeType = resolvedTimeType(entry, timeTypes)
     if (timeType != null) {
         return try {
             Color(android.graphics.Color.parseColor(timeType.color))
@@ -118,7 +143,7 @@ private fun buildCalendarWeeks(month: YearMonth): List<List<CalendarDay>> {
     return days.chunked(7)
 }
 
-private fun timesheetRows(month: YearMonth, shiftEntries: List<LedgerEntry>): List<List<String>> {
+private fun timesheetRows(month: YearMonth, shiftEntries: List<LedgerEntry>, timeTypes: List<TimeType>): List<List<String>> {
     val dateFmt = DateTimeFormatter.ofPattern("dd.MM.yyyy")
     val rows = mutableListOf<List<String>>()
     rows.add(listOf("Табель", formatMonth(month)))
@@ -128,7 +153,7 @@ private fun timesheetRows(month: YearMonth, shiftEntries: List<LedgerEntry>): Li
             listOf(
                 e.date.format(dateFmt),
                 e.date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale("ru")).uppercase(Locale("ru")),
-                shiftTypeSummaryLabel(e.shiftType),
+                shiftLabelFor(e, timeTypes),
                 formatHours(e.calculatePaidHours())
             )
         )
@@ -153,15 +178,29 @@ fun IncomeReportScreen(
         breakdown.entries.filter { it.type == EntryType.SHIFT && YearMonth.from(it.date) == month }
     }
 
+    // ИСПРАВЛЕНО (ТЗ: «сделать кнопку выхода из вкладки доход»): раньше выйти
+    // можно было только тапом по маленькому шеврону-«сворачиванию» без подписи
+    // (легко не заметить, а системная кнопка/жест «назад» экран вообще не
+    // закрывали, потому что BackHandler не был подключён). Теперь есть явная
+    // подписанная кнопка «Закрыть» (крестик) и системная кнопка «назад» тоже
+    // закрывает вкладку.
+    BackHandler(onBack = onDismiss)
+
     Scaffold(
         topBar = {
             Column(Modifier.background(Color.White)) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center
+                    modifier = Modifier.fillMaxWidth().padding(end = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Filled.ExpandMore, contentDescription = "Свернуть", tint = Color.DarkGray)
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Icon(Icons.Filled.Close, contentDescription = null, tint = Color.DarkGray)
+                        Spacer(Modifier.width(4.dp))
+                        Text("Закрыть", color = Color.DarkGray, fontSize = 13.sp)
                     }
                 }
                 TabRow(selectedTabIndex = activeTab, containerColor = Color.White, contentColor = IncomeGreen) {
@@ -206,13 +245,13 @@ fun IncomeReportScreen(
                     shiftEntries = shiftEntries,
                     timeTypes = timeTypes,
                     onPreview = {
-                        ReportExport.previewAsPdf(context, "Табель", timesheetRows(month, shiftEntries))
+                        ReportExport.previewAsPdf(context, "Табель", timesheetRows(month, shiftEntries, timeTypes))
                     },
                     onShareXls = {
-                        ReportExport.shareAsXls(context, "Табель", timesheetRows(month, shiftEntries))
+                        ReportExport.shareAsXls(context, "Табель", timesheetRows(month, shiftEntries, timeTypes))
                     },
                     onSharePdf = {
-                        ReportExport.shareAsPdf(context, "Табель", timesheetRows(month, shiftEntries))
+                        ReportExport.shareAsPdf(context, "Табель", timesheetRows(month, shiftEntries, timeTypes))
                     }
                 )
             }
@@ -243,7 +282,9 @@ private fun PayslipTabContent(
             Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
                     value = balanceText,
-                    onValueChange = { balanceText = it },
+                    // ИСПРАВЛЕНО (ТЗ: «в полях про деньги можно ввести только цифры»):
+                    // остаток может быть отрицательным — разрешаем ведущий минус.
+                    onValueChange = { balanceText = moneySignedInputFilter(it) },
                     label = { Text("Остаток на начало") },
                     singleLine = true,
                     modifier = Modifier.weight(1f)
@@ -373,16 +414,25 @@ private fun TimesheetTabContent(
             val totalDays = shiftEntries.map { it.date }.distinct().size
             SummaryRow("Смены", formatHours(totalPaidHours), "$totalDays д.")
 
-            shiftEntries.groupBy { it.shiftType }.forEach { (type, list) ->
-                val hours = list.sumOf { it.calculatePaidHours() }
-                val days = list.map { it.date }.distinct().size
-                SummaryRow(
-                    label = shiftTypeSummaryLabel(type),
-                    value1 = formatHours(hours),
-                    value2 = "$days д.",
-                    dotColor = shiftColorFor(list.first(), timeTypes)
-                )
+            // ИСПРАВЛЕНО: группировка теперь по реальному типу из справочника
+            // (timeTypeId), а не по старому пятизначному enum — иначе, например,
+            // все нестандартные/пользовательские типы схлопывались в одну строку.
+            shiftEntries.groupBy {
+                val baseKey = resolvedTimeType(it, timeTypes)?.id ?: it.timeTypeId ?: it.shiftType.name
+                // Сверхурочные группируем отдельно от обычных смен того же типа —
+                // иначе они сливались бы в одну строку с одинаковым названием.
+                if (it.overtimeEnabled) "$baseKey#overtime" else baseKey
             }
+                .forEach { (_, list) ->
+                    val hours = list.sumOf { it.calculatePaidHours() }
+                    val days = list.map { it.date }.distinct().size
+                    SummaryRow(
+                        label = shiftLabelFor(list.first(), timeTypes),
+                        value1 = formatHours(hours),
+                        value2 = "$days д.",
+                        dotColor = shiftColorFor(list.first(), timeTypes)
+                    )
+                }
 
             val totalBreakMinutes = shiftEntries.sumOf { it.unpaidBreakMinutes }
             if (totalBreakMinutes > 0) {

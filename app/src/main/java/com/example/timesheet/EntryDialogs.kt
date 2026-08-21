@@ -30,9 +30,16 @@ import com.example.timesheet.data.LedgerEntry
 import com.example.timesheet.data.Organization
 import com.example.timesheet.data.ShiftType
 import com.example.timesheet.data.UnitOfMeasure
+import com.example.timesheet.data.moneyInputFilter
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+
+/**
+ * ИСПРАВЛЕНО: теперь используется общий com.example.timesheet.data.moneyInputFilter
+ * вместо локальной копии — одна и та же логика во всех диалогах проекта, а не
+ * несколько похожих копий, которые могли незаметно разойтись.
+ */
 
 @Composable
 fun AddEntryDialog(
@@ -207,7 +214,7 @@ fun AddEntryDialog(
                 } else {
                     OutlinedTextField(
                         value = amountText,
-                        onValueChange = { amountText = it },
+                        onValueChange = { amountText = moneyInputFilter(it) },
                         label = { Text("Сумма, ₽") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
@@ -345,7 +352,7 @@ fun AddEntryDialog(
 
                     OutlinedTextField(
                         value = quantityText,
-                        onValueChange = { quantityText = it },
+                        onValueChange = { quantityText = moneyInputFilter(it) },
                         label = { Text("Количество") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()

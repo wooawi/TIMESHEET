@@ -167,10 +167,19 @@ fun PayslipReportScreen(
     val entries by viewModel.entries.collectAsState()
     val surcharges by viewModel.surcharges.collectAsState()
     val openingBalance by viewModel.openingBalance.collectAsState()
+    val timeTypes by viewModel.timeTypes.collectAsState()
 
-    var periodStart by remember { mutableStateOf(YearMonth.now().atDay(1)) }
-    var periodEnd by remember { mutableStateOf(LocalDate.now()) }
-    var quickPeriodId by remember { mutableStateOf<String?>("this_month") }
+    // ИСПРАВЛЕНО (ТЗ: «выбор времени во всех вкладках должно влиять на записи в
+    // главном меню», «все вкладки должны иметь взаимосвязь а не быть
+    // отдельными»): раньше период здесь был локальным `remember`, полностью
+    // отдельным от периода на главном экране/журнале смен — переключение
+    // периода тут никак не влияло на главный экран, и наоборот. Теперь период
+    // берётся из общего `viewModel.reportPeriodStart/End`, который уже
+    // используется главным экраном (см. MainActivity.kt) — один и тот же
+    // период везде.
+    val periodStart by viewModel.reportPeriodStart.collectAsState()
+    val periodEnd by viewModel.reportPeriodEnd.collectAsState()
+    val quickPeriodId by viewModel.reportQuickPeriodId.collectAsState()
     var filterOrgId by remember { mutableStateOf<String?>(null) }
     var filterEmpId by remember { mutableStateOf<String?>(null) }
     var showSettings by remember { mutableStateOf(false) }
@@ -191,7 +200,7 @@ fun PayslipReportScreen(
         return
     }
 
-    val breakdown = remember(entries, employees, periodStart, periodEnd, filterOrgId, filterEmpId, openingBalance, surcharges) {
+    val breakdown = remember(entries, employees, periodStart, periodEnd, filterOrgId, filterEmpId, openingBalance, surcharges, timeTypes) {
         PayrollCalculator.calculateForPeriod(
             entries = entries,
             employees = employees,
@@ -200,7 +209,8 @@ fun PayslipReportScreen(
             end = periodEnd,
             employeeFilter = filterEmpId,
             organizationFilter = filterOrgId,
-            openingBalance = openingBalance
+            openingBalance = openingBalance,
+            timeTypes = timeTypes
         )
     }
 
@@ -212,7 +222,7 @@ fun PayslipReportScreen(
                 periodStart = periodStart,
                 periodEnd = periodEnd,
                 onBack = onBack,
-                onPeriodSelect = { id, s, e -> quickPeriodId = id; periodStart = s; periodEnd = e },
+                onPeriodSelect = { id, s, e -> viewModel.applyQuickReportPeriod(id) },
                 onSettingsClick = { showSettings = true }
             )
         }
@@ -298,10 +308,13 @@ fun WorkHoursReportScreen(
 ) {
     val entries by viewModel.entries.collectAsState()
     val surcharges by viewModel.surcharges.collectAsState()
+    val timeTypes by viewModel.timeTypes.collectAsState()
 
-    var periodStart by remember { mutableStateOf(YearMonth.now().atDay(1)) }
-    var periodEnd by remember { mutableStateOf(LocalDate.now()) }
-    var quickPeriodId by remember { mutableStateOf<String?>("this_month") }
+    // ИСПРАВЛЕНО: см. комментарий в PayslipReportScreen выше — период теперь
+    // общий для всех вкладок вместо локального.
+    val periodStart by viewModel.reportPeriodStart.collectAsState()
+    val periodEnd by viewModel.reportPeriodEnd.collectAsState()
+    val quickPeriodId by viewModel.reportQuickPeriodId.collectAsState()
     var filterOrgId by remember { mutableStateOf<String?>(null) }
     var filterEmpId by remember { mutableStateOf<String?>(null) }
     var showSettings by remember { mutableStateOf(false) }
@@ -326,11 +339,12 @@ fun WorkHoursReportScreen(
                     (filterEmpId == null || e.employeeId == filterEmpId)
         }
     }
-    val breakdown = remember(filtered, employees, surcharges) {
+    val breakdown = remember(filtered, employees, surcharges, timeTypes) {
         PayrollCalculator.calculateForPeriod(
             entries = filtered, employees = employees, surcharges = surcharges,
             start = periodStart, end = periodEnd,
-            employeeFilter = null, organizationFilter = null, openingBalance = 0.0
+            employeeFilter = null, organizationFilter = null, openingBalance = 0.0,
+            timeTypes = timeTypes
         )
     }
 
@@ -342,7 +356,7 @@ fun WorkHoursReportScreen(
                 periodStart = periodStart,
                 periodEnd = periodEnd,
                 onBack = onBack,
-                onPeriodSelect = { id, s, e -> quickPeriodId = id; periodStart = s; periodEnd = e },
+                onPeriodSelect = { id, s, e -> viewModel.applyQuickReportPeriod(id) },
                 onSettingsClick = { showSettings = true }
             )
         }
@@ -362,15 +376,22 @@ fun WorkHoursReportScreen(
                 }
             }
 
-            val byEmployee = filtered.groupBy { it.employeeId }.entries.toList()
-            if (byEmployee.isEmpty()) {
+            // ИСПРАВЛЕНО (ТЗ: «почему рабочее время по проектам... в справочнике не
+            // меняются»): экран называется «Рабочее время ПО ПРОЕКТАМ», но раньше
+            // группировал смены по сотруднику и вообще не читал `projectName` —
+            // поэтому что бы ни было указано в поле «Проект» у смены, на этот
+            // отчёт это никак не влияло. Теперь группировка идёт по проекту;
+            // смены без указанного проекта попадают в отдельную группу «Без
+            // проекта», чтобы ни одна запись не терялась.
+            val byProject = filtered.groupBy { it.projectName.ifBlank { null } }.entries.toList()
+            if (byProject.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Нет записей за выбранный период")
                 }
             } else {
                 LazyColumn(Modifier.fillMaxSize().padding(16.dp)) {
-                    items(byEmployee) { (empId, list) ->
-                        val name = employees.find { it.id == empId }?.name ?: "Я"
+                    items(byProject) { (project, list) ->
+                        val name = project ?: "Без проекта"
                         val hours = list.sumOf { it.calculateHours() }
                         Row(
                             modifier = Modifier
@@ -401,9 +422,11 @@ fun ExpensesReportScreen(
     val entries by viewModel.entries.collectAsState()
     val expenseCategories by viewModel.expenseCategories.collectAsState()
 
-    var periodStart by remember { mutableStateOf(YearMonth.now().atDay(1)) }
-    var periodEnd by remember { mutableStateOf(LocalDate.now()) }
-    var quickPeriodId by remember { mutableStateOf<String?>("this_month") }
+    // ИСПРАВЛЕНО: см. комментарий в PayslipReportScreen выше — период теперь
+    // общий для всех вкладок вместо локального.
+    val periodStart by viewModel.reportPeriodStart.collectAsState()
+    val periodEnd by viewModel.reportPeriodEnd.collectAsState()
+    val quickPeriodId by viewModel.reportQuickPeriodId.collectAsState()
     var filterOrgId by remember { mutableStateOf<String?>(null) }
     var filterEmpId by remember { mutableStateOf<String?>(null) }
     var showSettings by remember { mutableStateOf(false) }
@@ -438,7 +461,7 @@ fun ExpensesReportScreen(
                 periodStart = periodStart,
                 periodEnd = periodEnd,
                 onBack = onBack,
-                onPeriodSelect = { id, s, e -> quickPeriodId = id; periodStart = s; periodEnd = e },
+                onPeriodSelect = { id, s, e -> viewModel.applyQuickReportPeriod(id) },
                 onSettingsClick = { showSettings = true }
             )
         }

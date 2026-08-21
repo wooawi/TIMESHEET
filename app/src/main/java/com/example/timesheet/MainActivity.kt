@@ -71,11 +71,13 @@ import com.example.timesheet.data.Employee
 import com.example.timesheet.data.EntryType
 import com.example.timesheet.data.ExpenseCategory
 import com.example.timesheet.data.LedgerEntry
+import com.example.timesheet.data.moneyInputFilter
 import com.example.timesheet.data.Organization
 import com.example.timesheet.data.PayrollCalculator
 import com.example.timesheet.data.Surcharge
 import com.example.timesheet.data.Tax
 import com.example.timesheet.data.TimeType
+import com.example.timesheet.data.UnitOfMeasure
 import com.example.timesheet.ui.AddEntryDialog
 import com.example.timesheet.ui.AddFab
 import com.example.timesheet.ui.AddMenu
@@ -162,6 +164,9 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
     val taxes by viewModel.taxes.collectAsState()
     val reportPeriodStart by viewModel.reportPeriodStart.collectAsState()
     val reportPeriodEnd by viewModel.reportPeriodEnd.collectAsState()
+    // ДОБАВЛЕНО: подписка на фильтры журнала смен из ViewModel
+    val filterOrganizationId by viewModel.filterOrganizationId.collectAsState()
+    val filterEmployeeId by viewModel.filterEmployeeId.collectAsState()
 
     val breakdown = remember(
         entries,
@@ -171,7 +176,8 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
         selectedEmployeeId,
         selectedOrganizationId,
         openingBalance,
-        surcharges
+        surcharges,
+        timeTypes
     ) {
         PayrollCalculator.calculateForPeriod(
             entries = entries,
@@ -181,7 +187,8 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
             end = reportPeriodEnd,
             employeeFilter = selectedEmployeeId,
             organizationFilter = selectedOrganizationId,
-            openingBalance = openingBalance
+            openingBalance = openingBalance,
+            timeTypes = timeTypes
         )
     }
 
@@ -193,8 +200,6 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
     var showIncomeDialog by remember { mutableStateOf(false) }
     var editingEntry by remember { mutableStateOf<LedgerEntry?>(null) }
 
-    // УДАЛЕНЫ: showShiftTemplates, editingShiftTemplate, shiftTemplateToApply
-
     var editingSurcharge by remember { mutableStateOf<Surcharge?>(null) }
     var editingTimeType by remember { mutableStateOf<TimeType?>(null) }
     var editingExpenseCategory by remember { mutableStateOf<ExpenseCategory?>(null) }
@@ -204,8 +209,6 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
     var showPeriodSettings by remember { mutableStateOf(false) }
     var showShiftJournal by remember { mutableStateOf(false) }
     var showFilterMenu by remember { mutableStateOf(false) }
-    var filterOrganizationId by remember { mutableStateOf<String?>(null) }
-    var filterEmployeeId by remember { mutableStateOf<String?>(null) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -275,6 +278,8 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                 organizations = organizations,
                 entries = entries,
                 timeTypes = timeTypes,
+                expenseCategories = expenseCategories,
+                units = units,
                 currentMonth = currentMonth,
                 selectedEmployeeId = selectedEmployeeId,
                 selectedOrganizationId = selectedOrganizationId,
@@ -368,10 +373,12 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                 employees = employees,
                 organizations = organizations,
                 timeTypes = timeTypes,
+                expenseCategories = expenseCategories,
+                units = units,
                 periodStart = reportPeriodStart,
                 periodEnd = reportPeriodEnd,
-                filterOrganizationId = filterOrganizationId,
-                filterEmployeeId = filterEmployeeId,
+                filterOrganizationId = filterOrganizationId,   // теперь из ViewModel
+                filterEmployeeId = filterEmployeeId,           // теперь из ViewModel
                 onBack = { currentScreen = "Журнал расчетов" },
                 onFilterClick = { currentScreen = "Фильтр" },
                 onEditEntry = { editingEntry = it },
@@ -383,12 +390,13 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
             "Фильтр" -> FilterMenuScreen(
                 organizations = organizations,
                 employees = employees,
-                selectedOrganizationId = filterOrganizationId,
-                selectedEmployeeId = filterEmployeeId,
+                selectedOrganizationId = filterOrganizationId, // из ViewModel
+                selectedEmployeeId = filterEmployeeId,         // из ViewModel
                 onBack = { currentScreen = "Журнал смен" },
                 onApplyFilter = { orgId, empId ->
-                    filterOrganizationId = orgId
-                    filterEmployeeId = empId
+                    // Обновляем фильтры через ViewModel, чтобы они сохранялись
+                    viewModel.setFilterOrganizationId(orgId)
+                    viewModel.setFilterEmployeeId(empId)
                 }
             )
 
@@ -447,33 +455,7 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
         }
 
         addEntryRequest?.let { request ->
-            if (request.type == EntryType.SHIFT) {
-                val projectSuggestions = entries.mapNotNull { it.projectName.ifBlank { null } }
-                    .filter { it.isNotBlank() }
-                ShiftEntryDialog(
-                    employees = employees,
-                    organizations = organizations,
-                    surcharges = surcharges,
-                    preselectedEmployeeId = selectedEmployeeId,
-                    preselectedOrganizationId = selectedOrganizationId,
-                    initialEntry = LedgerEntry(surchargeIds = request.surchargeIds),
-                    projectSuggestions = projectSuggestions,
-                    onClose = { addEntryRequest = null },
-                    onConfirm = { entry ->
-                        val duplicate = entries.any {
-                            it.date == entry.date &&
-                                    it.type == entry.type &&
-                                    it.employeeId == entry.employeeId &&
-                                    it.startTime == entry.startTime &&
-                                    it.endTime == entry.endTime
-                        }
-                        if (!duplicate) {
-                            viewModel.addEntry(entry)
-                        }
-                        addEntryRequest = null
-                    }
-                )
-            } else if (request.title == "Запись табеля") {
+            if (request.title == "Запись табеля") {
                 TimesheetEntryDialog(
                     employees = employees,
                     organizations = organizations,
@@ -483,6 +465,25 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                     onClose = { addEntryRequest = null },
                     onConfirm = { newEntries ->
                         newEntries.forEach { viewModel.addEntry(it) }
+                        addEntryRequest = null
+                    }
+                )
+            } else if (request.type == EntryType.SHIFT) {
+                val projectSuggestions = entries.mapNotNull { it.projectName.ifBlank { null } }
+                    .filter { it.isNotBlank() }
+                ShiftEntryDialog(
+                    employees = employees,
+                    organizations = organizations,
+                    surcharges = surcharges,
+                    timeTypes = timeTypes,
+                    preselectedEmployeeId = selectedEmployeeId,
+                    preselectedOrganizationId = selectedOrganizationId,
+                    initialEntry = LedgerEntry(surchargeIds = request.surchargeIds),
+                    projectSuggestions = projectSuggestions,
+                    existingEntries = entries,
+                    onClose = { addEntryRequest = null },
+                    onConfirm = { entry ->
+                        viewModel.addEntry(entry)
                         addEntryRequest = null
                     }
                 )
@@ -503,10 +504,13 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
             } else if (request.type == EntryType.ADJUSTMENT) {
                 val projectSuggestions = entries.mapNotNull { it.projectName.ifBlank { null } }
                     .filter { it.isNotBlank() }
+                val adjustmentTypeSuggestions = entries.mapNotNull { it.adjustmentTypeName.ifBlank { null } }
+                    .filter { it.isNotBlank() }
                 AdjustmentEntryDialog(
                     employees = employees,
                     organizations = organizations,
                     projectSuggestions = projectSuggestions,
+                    adjustmentTypeSuggestions = adjustmentTypeSuggestions,
                     preselectedEmployeeId = selectedEmployeeId,
                     preselectedOrganizationId = selectedOrganizationId,
                     onClose = { addEntryRequest = null },
@@ -542,16 +546,7 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                     initialSurchargeIds = request.surchargeIds,
                     onDismiss = { addEntryRequest = null },
                     onConfirm = { entry ->
-                        val duplicate = entries.any {
-                            it.date == entry.date &&
-                                    it.type == entry.type &&
-                                    it.employeeId == entry.employeeId &&
-                                    it.hours == entry.hours &&
-                                    it.amount == entry.amount
-                        }
-                        if (!duplicate) {
-                            viewModel.addEntry(entry)
-                        }
+                        viewModel.addEntry(entry)
                         addEntryRequest = null
                     }
                 )
@@ -566,10 +561,12 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
                     employees = employees,
                     organizations = organizations,
                     surcharges = surcharges,
+                    timeTypes = timeTypes,
                     preselectedEmployeeId = entry.employeeId,
                     preselectedOrganizationId = entry.organizationId,
                     initialEntry = entry,
                     projectSuggestions = projectSuggestions,
+                    existingEntries = entries,
                     onClose = { editingEntry = null },
                     onConfirm = { updated ->
                         viewModel.updateEntry(updated.copy(id = entry.id))
@@ -602,10 +599,13 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
             } else if (entry.type == EntryType.ADJUSTMENT) {
                 val projectSuggestions = entries.mapNotNull { it.projectName.ifBlank { null } }
                     .filter { it.isNotBlank() }
+                val adjustmentTypeSuggestions = entries.mapNotNull { it.adjustmentTypeName.ifBlank { null } }
+                    .filter { it.isNotBlank() }
                 AdjustmentEntryDialog(
                     employees = employees,
                     organizations = organizations,
                     projectSuggestions = projectSuggestions,
+                    adjustmentTypeSuggestions = adjustmentTypeSuggestions,
                     preselectedEmployeeId = entry.employeeId,
                     preselectedOrganizationId = entry.organizationId,
                     initialEntry = entry,
@@ -673,9 +673,6 @@ fun TimesheetApp(viewModel: AppViewModel = viewModel()) {
             )
         }
 
-        // УДАЛЕНЫ все диалоги, связанные с шаблонами смен:
-        // ShiftTemplateListScreen, ShiftTemplateEditScreen, SurchargeListScreen
-
         // ========== ДИАЛОГИ ДЛЯ СПРАВОЧНИКОВ ==========
 
         editingTimeType?.let { type ->
@@ -738,6 +735,8 @@ fun MainScreen(
     organizations: List<Organization>,
     entries: List<LedgerEntry>,
     timeTypes: List<TimeType>,
+    expenseCategories: List<ExpenseCategory> = emptyList(),
+    units: List<UnitOfMeasure> = emptyList(),
     currentMonth: java.time.YearMonth,
     selectedEmployeeId: String?,
     selectedOrganizationId: String?,
@@ -849,13 +848,18 @@ fun MainScreen(
                             .padding(16.dp)
                     ) {
                         items(
-                            filteredEntries.sortedByDescending { it.date },
+                            filteredEntries.sortedWith(
+                                compareByDescending<LedgerEntry> { it.date }
+                                    .thenByDescending { it.startTime ?: java.time.LocalTime.MIN }
+                            ),
                             key = { it.id }) { entry ->
                             JournalEntryItem(
                                 entry = entry,
                                 employeeName = employees.find { it.id == entry.employeeId }?.name,
                                 organizationName = organizations.find { it.id == entry.organizationId }?.name,
                                 timeTypes = timeTypes,
+                                expenseCategories = expenseCategories,
+                                units = units,
                                 onEdit = { onEditEntry(it) },
                                 onDelete = { onDeleteEntry(it) },
                                 onRecalculate = { onRecalculateEntry(it) },
@@ -1136,7 +1140,7 @@ fun EmployeeEditDialog(
                 )
                 OutlinedTextField(
                     value = rateText,
-                    onValueChange = { rateText = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
+                    onValueChange = { rateText = moneyInputFilter(it) },
                     label = { Text("Ставка в час, ₽ (необязательно)") },
                     singleLine = true
                 )
